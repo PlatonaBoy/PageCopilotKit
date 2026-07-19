@@ -10,7 +10,9 @@ export default defineConfig({
   build: {
     lib: {
       entry: resolve(__dirname, 'src/index.ts'),
-      name: 'EnterpriseCopilot',
+      // Must NOT be `EnterpriseCopilot` — top-level IIFE `var Name = …` overwrites
+      // window.EnterpriseCopilot in browsers and wipes the runtime API (.init).
+      name: 'EnterpriseCopilotBundle',
       formats: ['es', 'iife'],
       fileName: (format) =>
         format === 'iife' ? 'enterprise-copilot.js' : 'enterprise-copilot.esm.js',

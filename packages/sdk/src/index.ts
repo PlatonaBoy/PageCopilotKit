@@ -25,14 +25,26 @@ const api = {
 
 export default api;
 
+export type EnterpriseCopilotApi = typeof api;
+
 declare global {
   interface Window {
-    EnterpriseCopilot: typeof api;
-    Copilot: typeof api;
+    EnterpriseCopilot: EnterpriseCopilotApi;
+    Copilot: EnterpriseCopilotApi;
   }
 }
 
-if (typeof window !== 'undefined') {
+function installGlobals(): void {
+  if (typeof window === 'undefined') return;
   window.EnterpriseCopilot = api;
   window.Copilot = api;
+}
+
+installGlobals();
+// IIFE builds may assign the module namespace to a global after this module runs;
+// re-install on next tick so window.EnterpriseCopilot keeps .init().
+if (typeof queueMicrotask === 'function') {
+  queueMicrotask(installGlobals);
+} else if (typeof setTimeout === 'function') {
+  setTimeout(installGlobals, 0);
 }

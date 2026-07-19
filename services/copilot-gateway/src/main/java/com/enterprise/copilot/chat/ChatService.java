@@ -88,10 +88,12 @@ public class ChatService {
                       "message",
                       ex.getMessage() == null ? "model error" : ex.getMessage()));
               emit(emitter, "done", Map.of("traceId", traceId));
+              // Prefer clean completion after structured SSE error — avoid
+              // completeWithError wiping a usable client-side parse.
+              emitter.complete();
             } catch (Exception ignored) {
-              // ignore secondary failures
+              emitter.completeWithError(ex);
             }
-            emitter.completeWithError(ex);
           }
         });
 

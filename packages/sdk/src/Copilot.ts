@@ -109,12 +109,13 @@ export class Copilot {
             this.sync();
           },
           onError: (message) => {
-            assistantMsg.content = assistantMsg.content || `错误：${message}`;
+            assistantMsg.content = `错误：${message}`;
             this.messages = [...this.messages.slice(0, -1), { ...assistantMsg }];
             this.sync();
           },
           onDone: (content) => {
-            if (content) {
+            // Do not overwrite an error message already shown via onError
+            if (content && !assistantMsg.content.startsWith('错误：')) {
               assistantMsg.content = content;
               this.messages = [...this.messages.slice(0, -1), { ...assistantMsg }];
             }
@@ -122,9 +123,14 @@ export class Copilot {
         },
       });
     } catch (err) {
+      if ((err as Error)?.name === 'AbortError') {
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
-      assistantMsg.content = `请求失败：${message}`;
-      this.messages = [...this.messages.slice(0, -1), { ...assistantMsg }];
+      if (!assistantMsg.content.startsWith('错误：')) {
+        assistantMsg.content = `请求失败：${message}`;
+        this.messages = [...this.messages.slice(0, -1), { ...assistantMsg }];
+      }
     } finally {
       this.streaming = false;
       this.sync();

@@ -19,13 +19,23 @@ public class WebConfig implements WebMvcConfigurer {
 
   @Override
   public void addCorsMappings(CorsRegistry registry) {
-    registry
-        .addMapping("/v1/**")
-        .allowedOrigins(properties.getCorsAllowedOrigins().toArray(String[]::new))
-        .allowedMethods("GET", "POST", "OPTIONS")
-        .allowedHeaders("*")
-        .allowCredentials(true)
-        .maxAge(3600);
+    String[] origins = properties.getCorsAllowedOrigins().toArray(String[]::new);
+    var registration =
+        registry
+            .addMapping("/v1/**")
+            .allowedMethods("GET", "POST", "OPTIONS")
+            .allowedHeaders("*")
+            .allowCredentials(true)
+            .maxAge(3600);
+
+    // Prefer patterns so LAN IPs / Cursor port-forward hosts work in demo.
+    // Explicit list still honored when it does not contain the wildcard pattern.
+    if (properties.isCorsAllowAllPatterns()
+        || (origins.length == 1 && "*".equals(origins[0]))) {
+      registration.allowedOriginPatterns("*");
+    } else {
+      registration.allowedOriginPatterns(origins);
+    }
   }
 
   @Override
@@ -33,6 +43,6 @@ public class WebConfig implements WebMvcConfigurer {
     registry
         .addInterceptor(jwtAuthInterceptor)
         .addPathPatterns("/v1/**")
-        .excludePathPatterns("/v1/health", "/v1/demo/token");
+        .excludePathPatterns("/v1/health", "/v1/demo/token", "/v1/demo/audits");
   }
 }

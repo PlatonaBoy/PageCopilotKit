@@ -42,7 +42,13 @@ export function CopilotWidget({ ui, messages, streaming, onSend }: CopilotWidget
       >
         AI
       </button>
-      <div className="panel" hidden={!open} role="dialog" aria-label={title}>
+      <div
+        className="panel"
+        hidden={!open}
+        role="dialog"
+        aria-label={title}
+        data-streaming={streaming ? 'true' : 'false'}
+      >
         <div className="header">
           <h1>{title}</h1>
           <button type="button" aria-label="Close" onClick={() => setOpen(false)}>

@@ -34,6 +34,8 @@ copilot:
   demo-token-enabled: true
   # When true (or api-key is sk-mock), gateway streams a deterministic mock answer
   mock-llm: ${COPILOT_MOCK_LLM:true}
+  # Allow any browser Origin in local/demo (LAN IP, Cursor port-forward hosts)
+  cors-allow-all-patterns: ${COPILOT_CORS_ALLOW_ALL:true}
   context:
     max-business-bytes: 4096
     max-summary-chars: 12000

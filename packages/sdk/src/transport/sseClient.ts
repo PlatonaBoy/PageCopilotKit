@@ -38,56 +38,93 @@ export async function streamChat(options: {
   let buffer = '';
   let assembled = '';
   let traceId: string | undefined;
+  let streamError: string | undefined;
+  let finished = false;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  const consume = (chunk: string, flush: boolean) => {
+    buffer += chunk;
+    // Normalize CRLF event separators used by some proxies/servers
+    buffer = buffer.replace(/\r\n/g, '\n');
 
     let sep: number;
     while ((sep = buffer.indexOf('\n\n')) >= 0) {
       const rawEvent = buffer.slice(0, sep);
       buffer = buffer.slice(sep + 2);
-      const parsed = parseSseBlock(rawEvent);
-      if (!parsed) continue;
-
-      switch (parsed.event) {
-        case 'thread': {
-          const threadId = String((parsed.data as { threadId?: string }).threadId || '');
-          if (threadId) options.handlers.onThread?.(threadId);
-          break;
-        }
-        case 'text.delta': {
-          const delta = String((parsed.data as { delta?: string }).delta || '');
-          assembled += delta;
-          options.handlers.onDelta?.(delta);
-          break;
-        }
-        case 'text.done': {
-          const content = String((parsed.data as { content?: string }).content || assembled);
-          assembled = content;
-          break;
-        }
-        case 'error': {
-          const message = String((parsed.data as { message?: string }).message || 'error');
-          options.handlers.onError?.(message);
-          break;
-        }
-        case 'done': {
-          traceId = (parsed.data as { traceId?: string }).traceId;
-          break;
-        }
-        default:
-          break;
-      }
+      dispatch(rawEvent);
+      if (finished) return;
     }
+
+    if (flush && buffer.trim()) {
+      dispatch(buffer);
+      buffer = '';
+    }
+  };
+
+  const dispatch = (rawEvent: string) => {
+    const parsed = parseSseBlock(rawEvent);
+    if (!parsed) return;
+
+    switch (parsed.event) {
+      case 'thread': {
+        const threadId = String((parsed.data as { threadId?: string }).threadId || '');
+        if (threadId) options.handlers.onThread?.(threadId);
+        break;
+      }
+      case 'text.delta': {
+        const delta = String((parsed.data as { delta?: string }).delta || '');
+        assembled += delta;
+        options.handlers.onDelta?.(delta);
+        break;
+      }
+      case 'text.done': {
+        const content = String((parsed.data as { content?: string }).content || assembled);
+        assembled = content;
+        break;
+      }
+      case 'error': {
+        const message = String((parsed.data as { message?: string }).message || 'error');
+        streamError = message;
+        options.handlers.onError?.(message);
+        break;
+      }
+      case 'done': {
+        traceId = (parsed.data as { traceId?: string }).traceId;
+        // Spring SseEmitter may keep the TCP stream open after complete();
+        // treat protocol `done` as end-of-turn so the UI unlocks.
+        finished = true;
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  try {
+    while (!finished) {
+      const { done, value } = await reader.read();
+      if (done) {
+        consume(decoder.decode(), true);
+        break;
+      }
+      consume(decoder.decode(value, { stream: true }), false);
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // ignore
+    }
+  }
+
+  if (streamError) {
+    throw new Error(streamError);
   }
 
   options.handlers.onDone?.(assembled, traceId);
 }
 
 function parseSseBlock(block: string): { event: string; data: unknown } | null {
-  const lines = block.split(/\r?\n/);
+  const lines = block.split(/\n/);
   let event = 'message';
   const dataLines: string[] = [];
   for (const line of lines) {

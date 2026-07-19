@@ -30,6 +30,8 @@ const INTERACTIVE_SELECTOR = [
 const SENSITIVE_INPUT =
   /password|passwd|pwd|secret|token|ssn|idcard|身份证|密码/i;
 
+const HISTORY_PATCHED = '__enterpriseCopilotHistoryPatched';
+
 export class PageEngine {
   private stale = true;
   private cache: PageContextSnapshot | null = null;
@@ -44,6 +46,7 @@ export class PageEngine {
     this.started = true;
     this.patchHistory();
     window.addEventListener('popstate', this.invalidate);
+    window.addEventListener('copilot:location', this.invalidate);
     this.observer = new MutationObserver(() => this.scheduleInvalidate());
     this.observer.observe(document.documentElement, {
       childList: true,
@@ -54,7 +57,10 @@ export class PageEngine {
   }
 
   stop(): void {
-    window.removeEventListener('popstate', this.invalidate);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('popstate', this.invalidate);
+      window.removeEventListener('copilot:location', this.invalidate);
+    }
     this.observer?.disconnect();
     this.observer = null;
     this.started = false;
@@ -85,17 +91,21 @@ export class PageEngine {
   }
 
   private patchHistory(): void {
+    if ((history as unknown as Record<string, unknown>)[HISTORY_PATCHED]) {
+      return;
+    }
+    (history as unknown as Record<string, unknown>)[HISTORY_PATCHED] = true;
+
     const wrap = (type: 'pushState' | 'replaceState') => {
-      const original = history[type];
+      const original = history[type].bind(history);
       history[type] = function (this: History, ...args: Parameters<History['pushState']>) {
-        const result = original.apply(this, args);
+        const result = original(...args);
         window.dispatchEvent(new Event('copilot:location'));
         return result;
       };
     };
     wrap('pushState');
     wrap('replaceState');
-    window.addEventListener('copilot:location', this.invalidate);
   }
 }
 

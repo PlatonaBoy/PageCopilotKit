@@ -46,12 +46,12 @@ function bindActions() {
 async function boot() {
   bindActions();
 
-  if (!window.EnterpriseCopilot && !window.Copilot) {
-    console.error('EnterpriseCopilot SDK failed to load');
+  const api = resolveCopilotApi();
+  if (!api) {
+    console.error('EnterpriseCopilot SDK failed to load (no init())');
     return;
   }
 
-  const api = window.EnterpriseCopilot || window.Copilot;
   let cachedToken = '';
   let tokenExpires = 0;
 
@@ -80,6 +80,24 @@ async function boot() {
   });
 
   console.info('[demo-host] Enterprise Copilot initialized →', GATEWAY);
+}
+
+function resolveCopilotApi() {
+  const candidates = [
+    window.EnterpriseCopilot,
+    window.Copilot,
+    window.EnterpriseCopilotBundle?.default,
+    window.EnterpriseCopilotBundle,
+  ];
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate.init === 'function') {
+      return candidate;
+    }
+    if (candidate?.default && typeof candidate.default.init === 'function') {
+      return candidate.default;
+    }
+  }
+  return null;
 }
 
 boot().catch((err) => {

@@ -14,6 +14,8 @@ public class CopilotProperties {
       new ArrayList<>(List.of("http://localhost:5173", "http://127.0.0.1:5173"));
   private boolean demoTokenEnabled = true;
   private boolean mockLlm = true;
+  /** When true, allow any Origin via allowedOriginPatterns (MVP / local demo). */
+  private boolean corsAllowAllPatterns = true;
   private Context context = new Context();
 
   public String getJwtSecret() {
@@ -62,6 +64,14 @@ public class CopilotProperties {
 
   public void setMockLlm(boolean mockLlm) {
     this.mockLlm = mockLlm;
+  }
+
+  public boolean isCorsAllowAllPatterns() {
+    return corsAllowAllPatterns;
+  }
+
+  public void setCorsAllowAllPatterns(boolean corsAllowAllPatterns) {
+    this.corsAllowAllPatterns = corsAllowAllPatterns;
   }
 
   public Context getContext() {
