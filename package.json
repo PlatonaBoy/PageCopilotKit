@@ -1,0 +1,12 @@
+{
+  "name": "enterprise-ai-copilot",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Enterprise AI Copilot SDK monorepo",
+  "scripts": {
+    "build:sdk": "npm run build --prefix packages/sdk && mkdir -p apps/demo-host/public/vendor && cp packages/sdk/dist/enterprise-copilot.js apps/demo-host/public/vendor/enterprise-copilot.js",
+    "dev:demo": "npm run build:sdk && npm run dev --prefix apps/demo-host",
+    "dev:gateway": "mvn -f services/copilot-gateway/pom.xml spring-boot:run",
+    "typecheck:sdk": "npm run typecheck --prefix packages/sdk"
+  }
+}

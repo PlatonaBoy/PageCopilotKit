@@ -1,0 +1,44 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: copilot-gateway
+  datasource:
+    url: jdbc:h2:file:./data/copilot;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  h2:
+    console:
+      enabled: true
+      path: /h2
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:sk-mock}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      chat:
+        options:
+          model: ${OPENAI_MODEL:gpt-4o-mini}
+          temperature: 0.3
+
+copilot:
+  jwt-secret: ${COPILOT_JWT_SECRET:dev-copilot-jwt-secret-change-me-32b}
+  jwt-issuer: enterprise-copilot
+  allowed-app-ids: crm,demo
+  cors-allowed-origins: http://localhost:5173,http://127.0.0.1:5173
+  demo-token-enabled: true
+  # When true (or api-key is sk-mock), gateway streams a deterministic mock answer
+  mock-llm: ${COPILOT_MOCK_LLM:true}
+  context:
+    max-business-bytes: 4096
+    max-summary-chars: 12000
+    max-actionable-elements: 40
+
+logging:
+  level:
+    com.enterprise.copilot: INFO

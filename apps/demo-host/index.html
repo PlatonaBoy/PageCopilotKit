@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>订单详情 - Demo CRM</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Demo CRM</div>
+      <nav>
+        <a href="#">客户</a>
+        <a href="#" class="active">订单</a>
+        <a href="#">报表</a>
+      </nav>
+      <div class="user">张三 · 销售经理</div>
+    </header>
+
+    <main class="page">
+      <h1>订单详情</h1>
+      <p class="subtitle">订单号 <strong id="order-id">ORD-123456</strong></p>
+
+      <section class="detail">
+        <div class="field">
+          <label>客户</label>
+          <div>华东制造有限公司（VIP）</div>
+        </div>
+        <div class="field">
+          <label>金额</label>
+          <div>¥ 50,000.00</div>
+        </div>
+        <div class="field">
+          <label>状态</label>
+          <div id="order-status" class="status">待审批</div>
+        </div>
+        <div class="field">
+          <label>申请人</label>
+          <div>李四</div>
+        </div>
+        <div class="field wide">
+          <label>备注</label>
+          <div>年度框架合同首笔订单，需经理审批后发货。</div>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button type="button" id="btn-approve" data-action="approve">提交审批</button>
+        <button type="button" id="btn-reject" data-action="reject" class="secondary">拒绝</button>
+        <button type="button" id="btn-export" data-action="export" class="secondary">导出 Excel</button>
+        <a href="#history" id="link-history">查看历史</a>
+      </div>
+
+      <section id="history" class="history">
+        <h2>审批历史</h2>
+        <ul>
+          <li>2026-07-18 09:12 · 李四 创建订单</li>
+          <li>2026-07-18 10:05 · 系统 进入待审批</li>
+        </ul>
+      </section>
+    </main>
+
+    <!-- Built SDK IIFE -->
+    <script src="/vendor/enterprise-copilot.js"></script>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

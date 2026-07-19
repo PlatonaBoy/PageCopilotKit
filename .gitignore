@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.*
+services/copilot-gateway/data/
+services/copilot-gateway/target/
+.idea/
+.vscode/
+*.iml
