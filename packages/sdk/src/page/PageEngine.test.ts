@@ -48,7 +48,7 @@ describe('PageEngine snapshot', () => {
     expect(serialized).toContain('正常按钮');
   });
 
-  it('skips regions marked data-copilot-ignore', async () => {
+  it('skips controls inside regions marked data-copilot-ignore', async () => {
     setBody(`
       <div data-copilot-ignore><button>内部调试</button><p>机密备注</p></div>
       <button>公开操作</button>
@@ -58,6 +58,35 @@ describe('PageEngine snapshot', () => {
 
     expect(snap.actionableElements.map((e) => e.name)).not.toContain('内部调试');
     expect(snap.actionableElements.map((e) => e.name)).toContain('公开操作');
+  });
+
+  it('excludes ignored regions from the page text, not just from controls', async () => {
+    setBody(`
+      <main>
+        <p>公开说明</p>
+        <section data-copilot-ignore><p>机密备注不应上传</p></section>
+      </main>
+    `);
+
+    const snap = await engine.snapshot();
+
+    expect(snap.summary).toContain('公开说明');
+    expect(snap.summary).not.toContain('机密备注不应上传');
+  });
+
+  it('excludes script and style content from the page text', async () => {
+    setBody(`
+      <main>
+        <p>正文</p>
+        <script>const secret = 'do-not-upload';</script>
+        <style>.x { color: red }</style>
+      </main>
+    `);
+
+    const snap = await engine.snapshot();
+
+    expect(snap.summary).toContain('正文');
+    expect(snap.summary).not.toContain('do-not-upload');
   });
 
   it('redacts emails, phone numbers and key-like strings from page text', async () => {

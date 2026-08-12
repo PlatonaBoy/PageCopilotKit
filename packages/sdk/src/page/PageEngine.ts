@@ -207,12 +207,27 @@ function buildSummary(actions: ActionableElement[]): string {
 
   const main =
     document.querySelector('main') || document.querySelector('[role="main"]') || document.body;
-  const bodyText = textOf(main);
+  const bodyText = visibleTextOf(main);
   if (bodyText) {
     sections.push(`PAGE_TEXT:\n${bodyText}`);
   }
 
   return sections.join('\n\n').slice(0, MAX_SUMMARY_CHARS);
+}
+
+/**
+ * Text of a container with excluded subtrees removed.
+ *
+ * A raw `textContent` read would still include `data-copilot-ignore` regions and password fields,
+ * so the container is cloned and those subtrees are dropped before reading.
+ */
+function visibleTextOf(container: Element | null): string {
+  if (!container) return '';
+  const clone = container.cloneNode(true) as HTMLElement;
+  clone
+    .querySelectorAll(`[${IGNORE_ATTR}], script, style, noscript, template, input[type="password"]`)
+    .forEach((node) => node.remove());
+  return textOf(clone);
 }
 
 /** Pulls label/value pairs from definition lists, form controls and common detail layouts. */

@@ -98,7 +98,8 @@ test('clears the conversation on demand', async ({ page }) => {
 });
 
 test('surfaces a retryable error when the gateway fails', async ({ page }) => {
-  await page.route(`${GATEWAY}/v1/chat`, (route) =>
+  // Glob-match so the route applies regardless of the gateway host the demo was configured with.
+  await page.route('**/v1/chat', (route) =>
     route.fulfill({ status: 503, body: JSON.stringify({ code: 'server_error', message: 'down' }) }),
   );
 
