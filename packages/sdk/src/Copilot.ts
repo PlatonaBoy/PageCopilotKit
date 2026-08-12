@@ -384,7 +384,9 @@ export class Copilot {
         handlers: this.streamHandlers(assistantId),
       });
     } catch (err) {
-      if (this.canRetryAfterAuth(err, isRetryAfterAuth)) {
+      // Replaying this request would re-run any tool the model asks for, so a turn that already
+      // wrote must not be retried.
+      if (this.canRetryAfterAuth(err, isRetryAfterAuth, { replaysActions: true })) {
         return this.requestTurn(text, assistantId, true);
       }
       throw err;
@@ -422,7 +424,9 @@ export class Copilot {
         },
       });
     } catch (err) {
-      if (this.canRetryAfterAuth(err, isRetryAfterAuth)) {
+      // Reporting an outcome does not re-execute anything, so this is safe to replay even after a
+      // write — and it must be, or the side effect stands while the server never learns the result.
+      if (this.canRetryAfterAuth(err, isRetryAfterAuth, { replaysActions: false })) {
         return this.continueAfterTool(call, settled, assistantId, true);
       }
       throw err;
@@ -431,15 +435,17 @@ export class Copilot {
 
   /**
    * A 401 mid-turn usually means the JWT expired while the panel was open; refetching the token and
-   * replaying once is safe. Never replay a turn that already performed a write.
+   * replaying once is safe — unless the replay would re-execute an action that already ran.
    */
-  private canRetryAfterAuth(err: unknown, alreadyRetried: boolean): boolean {
-    return (
-      err instanceof CopilotError &&
-      err.code === 'unauthorized' &&
-      !alreadyRetried &&
-      !this.turnDidWrite
-    );
+  private canRetryAfterAuth(
+    err: unknown,
+    alreadyRetried: boolean,
+    options: { replaysActions: boolean },
+  ): boolean {
+    if (!(err instanceof CopilotError) || err.code !== 'unauthorized' || alreadyRetried) {
+      return false;
+    }
+    return !(options.replaysActions && this.turnDidWrite);
   }
 
   private streamHandlers(assistantId: string) {

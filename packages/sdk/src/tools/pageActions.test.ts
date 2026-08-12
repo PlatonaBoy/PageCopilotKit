@@ -93,6 +93,48 @@ describe('page action tools', () => {
     expect(result).toEqual({ selected: '加急' });
   });
 
+  it('refuses a blank option instead of picking the first one', async () => {
+    const snapshot = await mount(
+      '<label for="p">优先级</label><select id="p" name="p"><option value="normal">普通</option><option value="high">加急</option></select>',
+    );
+    const select = document.getElementById('p') as HTMLSelectElement;
+    select.value = 'high';
+
+    await expect(
+      tools.get('page_select')!.execute({ ref: refFor(snapshot, '优先级'), option: '  ' }),
+    ).rejects.toThrow(/option is required/);
+
+    // The existing selection must be untouched.
+    expect(select.value).toBe('high');
+  });
+
+  it('prefers an exact option match over a substring match', async () => {
+    const snapshot = await mount(
+      '<label for="p">优先级</label><select id="p" name="p"><option value="a">加急处理</option><option value="b">加急</option></select>',
+    );
+
+    await tools.get('page_select')!.execute({ ref: refFor(snapshot, '优先级'), option: '加急' });
+
+    expect((document.getElementById('p') as HTMLSelectElement).value).toBe('b');
+  });
+
+  it('refuses when the control label was extended into a different action', async () => {
+    const snapshot = await mount('<button id="go">删除</button>');
+    const ref = refFor(snapshot, '删除');
+    // "删除" -> "删除全部数据" is a different action, not a truncation of the same one.
+    document.getElementById('go')!.textContent = '删除全部数据';
+
+    await expect(tools.get('page_click')!.execute({ ref })).rejects.toThrow(/the page changed/);
+  });
+
+  it('refuses when the control label was cleared', async () => {
+    const snapshot = await mount('<button id="go">提交审批</button>');
+    const ref = refFor(snapshot, '提交审批');
+    document.getElementById('go')!.textContent = '';
+
+    await expect(tools.get('page_click')!.execute({ ref })).rejects.toThrow(/the page changed/);
+  });
+
   it('lists the available options when the requested one does not exist', async () => {
     const snapshot = await mount(
       '<label for="p">优先级</label><select id="p" name="p"><option>普通</option></select>',

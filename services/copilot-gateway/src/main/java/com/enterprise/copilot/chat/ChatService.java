@@ -101,10 +101,17 @@ public class ChatService {
     enforceRateLimit(user);
 
     ChatThread thread = threadService.requireOwned(user, threadId);
-    List<ClientTool> tools = toolPolicy.permitted(user, request.appId(), request.clientTools());
+    threadService.requireSameApp(thread, request.appId());
+    // Policy is evaluated against the thread's own application, never the one the client claims.
+    String appId = thread.getAppId();
+    List<ClientTool> tools = toolPolicy.permitted(user, appId, request.clientTools());
 
-    int steps = threadService.countToolCallsInCurrentTurn(threadId);
-    if (steps > properties.getTools().getMaxStepsPerTurn()) {
+    // A result is only meaningful for the call that is actually outstanding. Without this a caller
+    // could fabricate a successful outcome for a write the user never approved.
+    threadService.requirePendingToolCall(threadId, request.toolCallId(), request.name());
+
+    if (threadService.countToolCallsInCurrentTurn(threadId)
+        >= properties.getTools().getMaxStepsPerTurn()) {
       throw new ApiException(
           HttpStatus.CONFLICT, "tool_step_limit", "Too many tool steps for one turn");
     }
@@ -116,17 +123,12 @@ public class ChatService {
     List<ChatTurn> history = threadService.loadHistoryForPrompt(threadId);
     BuiltPrompt prompt =
         promptBuilder.buildContinuation(
-            user,
-            request.appId(),
-            request.pageContext(),
-            request.businessContext(),
-            history,
-            outcome);
+            user, appId, request.pageContext(), request.businessContext(), history, outcome);
 
     return run(
         user,
         thread,
-        request.appId(),
+        appId,
         "[tool-result] " + request.name(),
         prompt,
         tools,
@@ -272,7 +274,7 @@ public class ChatService {
       return;
     }
 
-    threadService.appendToolCallTurn(thread, call.name(), serialize(call.arguments()));
+    threadService.appendToolCallTurn(thread, call.id(), call.name(), serialize(call.arguments()));
     if (!full.isEmpty()) {
       // Any prose the model produced alongside the request is still a completed assistant turn.
       emit(emitter, "text.done", Map.of("content", full.toString()));

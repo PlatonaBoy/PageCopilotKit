@@ -67,6 +67,18 @@ class ToolCallingIntegrationTest {
         .toList();
   }
 
+  private String resultBody(String callId, String name, Object result) throws Exception {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("appId", "crm");
+    body.put("toolCallId", callId);
+    body.put("name", name);
+    body.put("result", result);
+    body.put("pageContext", page());
+    body.put("businessContext", Map.of("orderId", "ORD-1", "status", "审批中"));
+    body.put("clientTools", tools("approveOrder"));
+    return objectMapper.writeValueAsString(body);
+  }
+
   private String chatBody(String message, List<Map<String, Object>> clientTools) throws Exception {
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("appId", "crm");
@@ -193,6 +205,112 @@ class ToolCallingIntegrationTest {
     result.getAsyncResult(10_000);
 
     assertThat(utf8(result)).contains("未执行");
+  }
+
+  @Test
+  void rejectsAFabricatedResultWhenNoToolCallIsOutstanding() throws Exception {
+    String jwt = token(List.of("order:approve"));
+    // A plain question leaves no tool call pending.
+    String threadId = extract(stream(jwt, chatBody("订单状态是什么", tools("approveOrder"))), "threadId");
+
+    mockMvc
+        .perform(
+            post("/v1/chat/" + threadId + "/tool-result")
+                .header("Authorization", "Bearer " + jwt)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(resultBody("call_invented", "approveOrder", Map.of("ok", true))))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("no_pending_tool_call"));
+  }
+
+  @Test
+  void rejectsAResultThatDoesNotMatchTheOutstandingCall() throws Exception {
+    String jwt = token(List.of("order:approve"));
+    String first = stream(jwt, chatBody("帮我审批这个订单", tools("approveOrder")));
+    String threadId = extract(first, "threadId");
+
+    // Right thread, outstanding call — but a different tool name and id.
+    mockMvc
+        .perform(
+            post("/v1/chat/" + threadId + "/tool-result")
+                .header("Authorization", "Bearer " + jwt)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(resultBody("call_other", "page_click", Map.of("ok", true))))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("tool_call_mismatch"));
+  }
+
+  @Test
+  void rejectsReplayingAResultForAnAlreadyAnsweredCall() throws Exception {
+    String jwt = token(List.of("order:approve"));
+    String first = stream(jwt, chatBody("帮我审批这个订单", tools("approveOrder")));
+    String threadId = extract(first, "threadId");
+    String callId = extract(first, "id");
+
+    mockMvc
+        .perform(
+            post("/v1/chat/" + threadId + "/tool-result")
+                .header("Authorization", "Bearer " + jwt)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(resultBody(callId, "approveOrder", Map.of("ok", true))))
+        .andExpect(status().isOk())
+        .andReturn()
+        .getAsyncResult(10_000);
+
+    mockMvc
+        .perform(
+            post("/v1/chat/" + threadId + "/tool-result")
+                .header("Authorization", "Bearer " + jwt)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(resultBody(callId, "approveOrder", Map.of("ok", true))))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("no_pending_tool_call"));
+  }
+
+  @Test
+  void cannotContinueAThreadUnderADifferentApplication() throws Exception {
+    String jwt = token(List.of("order:approve"));
+    String threadId = extract(stream(jwt, chatBody("帮我审批这个订单", tools("approveOrder"))), "threadId");
+
+    Map<String, Object> body = new LinkedHashMap<>();
+    // `demo` has no tools allowlist, so accepting this appId would widen the policy.
+    body.put("appId", "demo");
+    body.put("toolCallId", "call_x");
+    body.put("name", "approveOrder");
+    body.put("result", Map.of("ok", true));
+    body.put("pageContext", page());
+    body.put("businessContext", Map.of());
+
+    mockMvc
+        .perform(
+            post("/v1/chat/" + threadId + "/tool-result")
+                .header("Authorization", "Bearer " + jwt)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(body)))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("app_mismatch"));
+  }
+
+  @Test
+  void cannotRebindAThreadToAnotherApplicationViaChat() throws Exception {
+    String jwt = token(List.of("order:approve"));
+    String threadId = extract(stream(jwt, chatBody("订单状态是什么", tools())), "threadId");
+
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("appId", "demo");
+    body.put("threadId", threadId);
+    body.put("message", "继续");
+    body.put("pageContext", page());
+    body.put("businessContext", Map.of());
+
+    mockMvc
+        .perform(
+            post("/v1/chat")
+                .header("Authorization", "Bearer " + jwt)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(body)))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("app_mismatch"));
   }
 
   @Test

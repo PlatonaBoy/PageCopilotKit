@@ -42,7 +42,7 @@ export class ElementRegistry {
       return { error: `element "${entry.described.name}" is disabled` };
     }
     const currentName = accessibleName(element);
-    if (currentName && entry.described.name && !namesMatch(currentName, entry.described.name)) {
+    if (!namesMatch(currentName, entry.described.name)) {
       return {
         error: `element "${entry.described.name}" now reads "${currentName}" — the page changed, request a fresh snapshot`,
       };
@@ -90,12 +90,25 @@ export function accessibleName(el: HTMLElement): string {
   return normalize(el.textContent ?? '');
 }
 
-/** Truncation and whitespace differences are tolerated; a different label is not. */
+/** Length at which PageEngine truncates a control name when building the snapshot. */
+const NAME_TRUNCATION_LENGTH = 80;
+
+/**
+ * Whitespace differences and snapshot truncation are tolerated; anything else is a different label.
+ *
+ * <p>Prefix matching is deliberately limited to the truncation boundary. Accepting any prefix would
+ * let a control relabelled from "删除" to "删除全部数据" still resolve — exactly the substitution this
+ * check exists to catch. A label that became empty is also treated as a change, since the model
+ * chose the control by its name.
+ */
 function namesMatch(current: string, described: string): boolean {
   const a = normalize(current);
   const b = normalize(described);
-  if (!a || !b) return true;
-  return a === b || a.startsWith(b) || b.startsWith(a);
+  if (!b) return true;
+  if (!a) return false;
+  if (a === b) return true;
+  // The snapshot stored a truncated name, so only the truncated form may differ in length.
+  return b.length >= NAME_TRUNCATION_LENGTH && a.startsWith(b);
 }
 
 function normalize(value: string): string {

@@ -32,17 +32,32 @@ public class ThreadService {
     this.properties = properties;
   }
 
-  /** Resolve an existing thread or create a new one. Never returns another user's thread. */
+  /**
+   * Resolve an existing thread or create a new one. Never returns another user's thread.
+   *
+   * <p>A thread's {@code appId} is fixed at creation. Rebinding it later would let a caller carry a
+   * conversation into an application with a laxer tool policy, so a mismatch is rejected.
+   */
   @Transactional
   public ChatThread resolveOrCreate(UserPrincipal user, String requestedThreadId, String appId) {
     if (requestedThreadId != null && !requestedThreadId.isBlank()) {
       ChatThread existing = requireOwned(user, requestedThreadId);
-      existing.setAppId(appId);
+      requireSameApp(existing, appId);
       existing.touch();
       return threads.save(existing);
     }
     String threadId = "thr_" + UUID.randomUUID().toString().replace("-", "");
     return threads.save(ChatThread.create(threadId, user.tenantId(), user.sub(), appId));
+  }
+
+  /** Rejects a request that claims a different application than the thread was created for. */
+  public void requireSameApp(ChatThread thread, String appId) {
+    if (appId != null && !appId.isBlank() && !thread.getAppId().equals(appId)) {
+      throw new ApiException(
+          HttpStatus.BAD_REQUEST,
+          "app_mismatch",
+          "Thread belongs to application " + thread.getAppId());
+    }
   }
 
   @Transactional(readOnly = true)
@@ -111,15 +126,53 @@ public class ThreadService {
     pruneIfNeeded(thread.getThreadId());
   }
 
+  /**
+   * Records an outstanding tool request.
+   *
+   * <p>The call id is stored alongside the name so the matching result can be verified later; the
+   * arguments follow so the prompt still reads naturally.
+   */
   @Transactional
-  public void appendToolCallTurn(ChatThread thread, String toolName, String argumentsJson) {
+  public void appendToolCallTurn(
+      ChatThread thread, String callId, String toolName, String argumentsJson) {
     turns.save(
         ChatTurn.of(
             thread.getThreadId(),
             ChatTurn.Role.TOOL_CALL,
-            toolName + " " + (argumentsJson == null ? "{}" : argumentsJson)));
+            "%s [%s] %s".formatted(toolName, callId, argumentsJson == null ? "{}" : argumentsJson)));
     thread.touch();
     threads.save(thread);
+  }
+
+  /**
+   * Verifies that the reported result answers the tool call the server is actually waiting on.
+   *
+   * <p>Guards two things: that a call is outstanding at all, and that the id and name match it. A
+   * client cannot otherwise inject an invented outcome — for instance claiming a write succeeded
+   * when the user declined it.
+   */
+  @Transactional(readOnly = true)
+  public void requirePendingToolCall(String threadId, String callId, String toolName) {
+    ChatTurn pending = null;
+    for (ChatTurn turn : turns.findByThreadIdOrderByIdAsc(threadId)) {
+      switch (turn.getRole()) {
+        case TOOL_CALL -> pending = turn;
+        // A recorded result or a new user message closes the outstanding call.
+        case TOOL_RESULT, USER -> pending = null;
+        default -> {}
+      }
+    }
+    if (pending == null) {
+      throw new ApiException(
+          HttpStatus.CONFLICT, "no_pending_tool_call", "No tool call is awaiting a result");
+    }
+    String expectedPrefix = "%s [%s]".formatted(toolName, callId);
+    if (!pending.getContent().startsWith(expectedPrefix)) {
+      throw new ApiException(
+          HttpStatus.CONFLICT,
+          "tool_call_mismatch",
+          "Result does not match the outstanding tool call");
+    }
   }
 
   @Transactional

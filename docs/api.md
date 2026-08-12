@@ -149,15 +149,23 @@ same turn, so no stream is held open across a user confirmation.
 
 | Field | Required | Notes |
 |-------|----------|-------|
-| `toolCallId` | yes | The `id` from the `tool.call` event. |
-| `name` | yes | Tool that ran. |
+| `appId` | yes | Must equal the thread's application. |
+| `toolCallId` | yes | The `id` from the `tool.call` event. Must match the outstanding call. |
+| `name` | yes | Tool that ran. Must match the outstanding call. |
 | `result` | no | Whatever the tool returned. Omit when it failed. |
 | `error` | no | Failure reason, or `user_declined: …` when the user refused. |
 | `pageContext` | no | **Fresh** snapshot — an action usually changed the DOM. |
 | `businessContext` | no | Re-read after the action. |
 
-Returns `404 thread_not_found` for another user's thread, and `409 tool_step_limit` when the turn has
-already used its tool-step budget.
+Failure responses:
+
+| HTTP | `code` | When |
+|------|--------|------|
+| 400 | `app_mismatch` | `appId` differs from the thread's application |
+| 404 | `thread_not_found` | Thread missing or owned by another user |
+| 409 | `no_pending_tool_call` | No call is awaiting a result (including a replay) |
+| 409 | `tool_call_mismatch` | Id or name does not match the outstanding call |
+| 409 | `tool_step_limit` | Turn already used its tool-step budget |
 
 ## `GET /v1/threads/{threadId}/messages`
 
@@ -239,8 +247,11 @@ configuration alone.
 | 401 | `unauthorized` | Missing/invalid token. Adds `reason`: `token_missing`, `token_expired`, `token_signature_invalid`, `token_malformed` |
 | 403 | `forbidden` | Authenticated but missing a required permission |
 | 404 | `not_found` | Route not registered (e.g. dev-only endpoint in prod) |
+| 400 | `app_mismatch` | Request claims a different application than the thread |
 | 404 | `thread_not_found` | Thread missing **or owned by another user** |
 | 405 | `method_not_allowed` | Wrong HTTP method |
+| 409 | `no_pending_tool_call` | Tool result posted with no call outstanding |
+| 409 | `tool_call_mismatch` | Tool result does not match the outstanding call |
 | 409 | `tool_step_limit` | Turn exceeded `copilot.tools.max-steps-per-turn` |
 | 413 | `context_too_large` | `businessContext` over 4KB |
 | 429 | `rate_limited` | Per-user or per-tenant limit exceeded |

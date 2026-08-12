@@ -183,7 +183,19 @@ they cannot be read or filled. `data-copilot-ignore` excludes whole regions.
 Once a turn has performed a write, the SDK disables its retry paths — including the 401 refresh
 replay — because re-running the turn could duplicate the side effect.
 
-### 8. Everything is auditable
+### 8. A result must answer the call the server is waiting on
+
+`tool-result` is rejected unless a matching `TOOL_CALL` is actually outstanding, with the same call id
+and tool name. Without this a client could post a fabricated success for a write the user declined,
+or replay an old outcome. Recording a result closes the call, so replays fail too.
+
+### 9. An application cannot be swapped mid-conversation
+
+A thread's `appId` is fixed at creation. Continuing it under a different application — which could
+have a laxer tool allowlist — is rejected with `app_mismatch`. Policy always resolves against the
+thread's stored application, never the one the request claims.
+
+### 10. Everything is auditable
 
 Tool calls and results are persisted as conversation turns, and each turn produces an audit row with
 `traceId`, tenant, user, question and outcome. `onToolCall` gives the host its own hook.
@@ -199,7 +211,13 @@ Tool calls and results are persisted as conversation turns, and each turn produc
 | Element gone or relabelled | Action fails with a "page changed" explanation; model can re-observe |
 | Tool not permitted | Never advertised; if it slips through, refused with `tool_forbidden` |
 | Tool never advertised | Refused with `tool_not_available` |
+| Result with no pending call | Refused with `no_pending_tool_call` |
+| Result for a different call | Refused with `tool_call_mismatch` |
+| Thread continued as another app | Refused with `app_mismatch` |
 | Step budget exhausted | Turn stops with `tool_step_limit` instead of looping |
+
+A 401 while *reporting* an outcome is retried automatically, because reporting re-executes nothing.
+A 401 on a request that could re-run an action is not retried once the turn has performed a write.
 
 ---
 

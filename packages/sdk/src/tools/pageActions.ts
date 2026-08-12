@@ -105,12 +105,15 @@ export function createPageActionTools(
           throw new Error(`control "${describe(page, args)}" is not a dropdown`);
         }
         const wanted = String(args.option ?? '').trim();
-        const match = Array.from(el.options).find(
-          (opt) =>
-            opt.textContent?.trim() === wanted ||
-            opt.value === wanted ||
-            opt.textContent?.trim().includes(wanted),
-        );
+        if (!wanted) {
+          // Substring matching would otherwise treat "" as matching every label and silently
+          // select the first option.
+          throw new Error('option is required');
+        }
+        const match =
+          Array.from(el.options).find(
+            (opt) => opt.textContent?.trim() === wanted || opt.value === wanted,
+          ) ?? Array.from(el.options).find((opt) => opt.textContent?.trim().includes(wanted));
         if (!match) {
           const available = Array.from(el.options)
             .map((o) => o.textContent?.trim())
