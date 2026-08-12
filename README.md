@@ -114,7 +114,7 @@ npm run test:e2e        # 浏览器端到端（需先起 gateway 与 demo）
 | 套件 | 覆盖 |
 |------|------|
 | SDK 单测（Vitest，77 项） | SSE 解析边界、上下文预算、页面提取与脱敏、状态批处理、Widget 与确认卡片、工具注册与 risk 判定、页面动作与元素身份校验、i18n |
-| Gateway 测试（JUnit，61 项） | Prompt 组装与预算、Mock 规划器、鉴权矩阵、多轮持久化、租户隔离、CORS、限额、工具白名单与权限、tool-result 绑定校验与应用隔离 |
+| Gateway 测试（JUnit，65 项） | Prompt 组装与预算、Mock 规划器、鉴权矩阵、多轮持久化、租户隔离、CORS、限额、工具白名单与权限、tool-result 绑定校验与应用隔离、启动配置校验 |
 | E2E（Playwright，18 项） | 嵌入加载、多轮上下文、刷新恢复、清空、错误重试、忽略区域、确认/拒绝、页面填表与下拉、权限拒绝 |
 
 若机器已装 Chrome，可用 `CHROME_PATH=/usr/bin/google-chrome npm run test:e2e` 复用它，省去浏览器下载。
