@@ -6,7 +6,9 @@
 
 ## 架构
 
-详见 [docs/architecture.md](docs/architecture.md) 与 [docs/api.md](docs/api.md)。
+- 现状架构：[docs/architecture.md](docs/architecture.md)
+- 接口契约：[docs/api.md](docs/api.md)
+- **V1 加固设计（现存缺口与落地顺序）：[docs/design-v1-hardening.md](docs/design-v1-hardening.md)**
 
 ```
 demo-host / 业务系统
@@ -87,6 +89,14 @@ Demo 会调用 `POST /v1/demo/token` 获取 JWT（仅本地演示）。
 - PageEngine 页面摘要 / 可操作元素（同文档 DOM）
 - Business Context Provider
 - Gateway：JWT、Prompt 组装、Mock/真实 LLM、审计落库（H2）
+
+**当前已知限制（V1 待补，详见 [加固设计](docs/design-v1-hardening.md)）**
+
+- 多轮对话未在服务端生效：模型每轮只收到当前一句，追问会丢上下文
+- 不能停止生成；失败无重试入口
+- `init.tools` / `ui.locale` / `ui.position` 为预留字段，当前未生效
+- `/v1/demo/token`、`/v1/demo/audits`、H2 控制台默认开启，**仅可用于本地演示**
+- Mock LLM 仅对「按钮」「状态」有专门规则，其余问题走兜底文案
 
 **二期**
 
