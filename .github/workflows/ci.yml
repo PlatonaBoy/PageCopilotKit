@@ -78,19 +78,31 @@ jobs:
         run: |
           mvn -B -q -DskipTests package
           nohup java -jar target/*.jar > /tmp/gateway.log 2>&1 &
+          # Must fail the step when the service never comes up, otherwise E2E runs
+          # against a dead gateway and reports opaque connection errors instead.
           for i in $(seq 1 40); do
-            curl -sf http://localhost:8080/v1/health && break
+            if curl -sf http://localhost:8080/v1/health; then
+              echo "gateway ready"
+              exit 0
+            fi
             sleep 2
           done
+          echo "gateway did not become healthy in time" >&2
+          exit 1
 
       - name: Start demo host
         run: |
           npm ci --prefix apps/demo-host
           nohup npm run dev --prefix apps/demo-host -- --port 5173 > /tmp/demo.log 2>&1 &
           for i in $(seq 1 30); do
-            curl -sf http://localhost:5173/ > /dev/null && break
+            if curl -sf http://localhost:5173/ > /dev/null; then
+              echo "demo host ready"
+              exit 0
+            fi
             sleep 2
           done
+          echo "demo host did not become reachable in time" >&2
+          exit 1
 
       - name: Run browser E2E
         run: |

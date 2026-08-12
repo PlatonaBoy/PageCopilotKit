@@ -3,27 +3,36 @@
 ## Cursor Cloud specific instructions
 
 ### Product / services
-Monorepo for an embeddable "Enterprise AI Copilot" (see `README.md` and `docs/`). Three parts:
+Monorepo for an embeddable "Enterprise AI Copilot" (see `README.md` and `docs/`). Four parts:
 
-- `packages/sdk` — TypeScript SDK (Vite lib build). Produces `packages/sdk/dist/enterprise-copilot.js` (IIFE) consumed by the demo.
+- `packages/sdk` — TypeScript SDK (Vite lib build). Produces `packages/sdk/dist/enterprise-copilot.js` (IIFE), `enterprise-copilot.esm.js` (ESM) and `index.d.ts`.
 - `apps/demo-host` — fake CRM demo page on Vite dev server (port `5173`).
-- `services/copilot-gateway` — Spring Boot + Spring AI gateway (Java 21, Maven), port `8080`, H2 audit DB (file at `services/copilot-gateway/data/`).
+- `services/copilot-gateway` — Spring Boot + Spring AI gateway (Java 21, Maven), port `8080`.
+- `tests/e2e` — Playwright browser tests against the running demo + gateway.
 
 ### Toolchain
-Node 20+ and Java 21 are available. Maven (`mvn`, installed system-wide) is required for the gateway and is not provided by the update script — it is baked into the VM image. If `mvn` is ever missing, install with `sudo apt-get install -y maven`.
+Node 20+ and Java 21 are available. Maven (`mvn`) is required for the gateway; if missing, install with `sudo apt-get install -y maven`.
 
 ### Running (dev)
-Standard commands are in `README.md` / root `package.json`. Key points:
 
-- Gateway (mock LLM, no API key needed): `COPILOT_MOCK_LLM=true mvn -f services/copilot-gateway/pom.xml spring-boot:run`. Health: `GET http://localhost:8080/v1/health` → `{"status":"UP"}`. Mock mode is the default (`copilot.mock-llm` defaults true), so it runs fully offline; set `COPILOT_MOCK_LLM=false` + `OPENAI_API_KEY` for a real model.
-- Demo host: from repo root run `npm run build:sdk` FIRST (this builds the SDK and copies the IIFE bundle to `apps/demo-host/public/vendor/enterprise-copilot.js`), then `npm run dev --prefix apps/demo-host`. `npm run dev:demo` does both. The vendor bundle is git-ignored and must be (re)built after SDK changes — the demo loads the built file via `<script src>`, not the SDK source, so SDK edits are NOT hot-reloaded into the demo until you rebuild.
+- **Gateway**: `SPRING_PROFILES_ACTIVE=dev mvn -f services/copilot-gateway/pom.xml spring-boot:run`.
+  - The `dev` profile is required locally: it supplies a dev JWT secret, uses an H2 file DB, enables permissive CORS, and registers the unauthenticated `POST /v1/demo/token` endpoint the demo needs. Under any other profile that endpoint is not registered (404) and startup fails without `COPILOT_JWT_SECRET` (≥ 32 bytes).
+  - Mock LLM is the default (`COPILOT_MOCK_LLM=true`), so it runs fully offline. The mock resolves questions against `businessContext` field names, so it answers amount/customer/status correctly. Set `COPILOT_MOCK_LLM=false` + `OPENAI_API_KEY` for a real model.
+  - Health: `GET http://localhost:8080/v1/health` → `{"status":"UP"}`. Actuator probes at `/actuator/health/{liveness,readiness}`.
+- **Demo host**: from repo root run `npm run build:sdk` FIRST (builds the SDK and copies the IIFE bundle to `apps/demo-host/public/vendor/`), then `npm run dev --prefix apps/demo-host`. `npm run dev:demo` does both. The vendor bundle is git-ignored and must be rebuilt after SDK changes — the demo loads the built file via `<script src>`, so SDK edits are NOT hot-reloaded.
 
 ### Lint / test / build
-- SDK typecheck + build: `npm run build:sdk` (runs `tsc --noEmit` then `vite build`). There is no separate ESLint config.
-- Gateway tests: `mvn -f services/copilot-gateway/pom.xml test` (JUnit via spring-boot-starter-test).
+
+- Everything at once: `npm run verify` (SDK lint + unit tests + build with size budget + gateway tests).
+- SDK: `npm run lint`, `npm run typecheck`, `npm test` (Vitest, jsdom), `npm run build` — all under `packages/sdk`. The build fails if the IIFE bundle exceeds its gzip budget (`scripts/check-size.mjs`).
+- Gateway: `mvn -f services/copilot-gateway/pom.xml test`. Integration tests use the `test` profile with in-memory H2 and Flyway.
+- E2E: start gateway + demo first, then `npm run test:e2e`. Set `CHROME_PATH` to reuse an installed Chrome instead of downloading one, e.g. `CHROME_PATH=/usr/local/bin/google-chrome npm run test:e2e`.
+
+### Database
+Schema is owned by Flyway (`services/copilot-gateway/src/main/resources/db/migration`) and Hibernate runs with `ddl-auto: validate`. Adding or changing an entity field requires a new `V<n>__*.sql` migration, otherwise startup fails with a schema-validation error. Note that `String` columns backed by `TEXT` must use `columnDefinition = "text"` rather than `@Lob`, or validation will expect a CLOB and fail.
 
 ### End-to-end smoke test (no browser needed)
-The full backend flow can be exercised with curl against a running gateway: `POST /v1/demo/token` to mint a demo JWT, then `POST /v1/chat` (SSE) with `Authorization: Bearer <token>`, `appId: crm`, a `message`, and a `businessContext`. The mock LLM echoes the order status / page buttons from the supplied context.
+With the gateway running under `dev`: `POST /v1/demo/token` to mint a JWT, then `POST /v1/chat` (SSE) with `Authorization: Bearer <token>`, `appId: crm`, a `message`, and a `businessContext`. Reuse the returned `threadId` on a follow-up request to exercise multi-turn history, and `GET /v1/threads/{threadId}/messages` to inspect stored turns.
 
-### Known product bug (not an environment issue)
-The browser demo currently throws `Copilot 初始化失败：api.init is not a function` on load. Root cause: `packages/sdk/src/index.ts` sets `window.EnterpriseCopilot = api` (which has `.init`), but the SDK Vite build (`packages/sdk/vite.config.ts`) uses `name: 'EnterpriseCopilot'` + `exports: 'named'`, so Rollup's IIFE wrapper overwrites `window.EnterpriseCopilot` with the module namespace object (`{ default: api, Copilot, ... }`) whose `.init` is undefined (it lives at `.default.init`). `window.Copilot` is unaffected. Minimal fixes: have `apps/demo-host/main.js` prefer `window.Copilot` (or unwrap `.default`), or drop `exports: 'named'` / rename the IIFE global in the SDK build. This is a product bug, intentionally left unfixed by environment setup.
+### Production shape
+`docker compose up --build` runs PostgreSQL plus the gateway on the `prod` profile. Copy `.env.example` to `.env` first — `COPILOT_JWT_SECRET` and `DB_PASSWORD` are required and compose fails fast without them. See `docs/operations.md` for the go-live checklist.
