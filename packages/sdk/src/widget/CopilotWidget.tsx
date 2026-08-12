@@ -1,26 +1,83 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Markdown from 'react-markdown';
+import type { Translator } from '../i18n';
+import type { CopilotStore } from '../store';
 import type { ChatMessage, CopilotUIOptions } from '../types';
 
 export interface CopilotWidgetProps {
   ui?: CopilotUIOptions;
-  messages: ChatMessage[];
-  streaming: boolean;
+  store: CopilotStore;
+  t: Translator;
   onSend: (text: string) => void;
+  onStop: () => void;
+  onRetry: () => void;
+  onClear: () => void;
 }
 
-export function CopilotWidget({ ui, messages, streaming, onSend }: CopilotWidgetProps) {
-  const [open, setOpen] = useState(false);
+export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }: CopilotWidgetProps) {
+  const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const [open, setOpen] = useState(Boolean(ui?.defaultOpen));
   const [draft, setDraft] = useState('');
-  const listRef = useRef<HTMLDivElement>(null);
-  const title = ui?.title || 'AI Copilot';
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  const listRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const pinnedToBottom = useRef(true);
+
+  const title = ui?.title || t('title');
+  const { messages, streaming, restoring, retryable } = state;
+
+  // Only autoscroll while the user is already at the bottom, so reading history is not hijacked.
   useEffect(() => {
     const el = listRef.current;
-    if (el) {
+    if (el && pinnedToBottom.current) {
       el.scrollTop = el.scrollHeight;
     }
   }, [messages, streaming, open]);
+
+  useEffect(() => {
+    if (open) {
+      textareaRef.current?.focus();
+    }
+  }, [open]);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    launcherRef.current?.focus();
+  }, []);
+
+  // Escape closes; Tab is trapped inside the dialog while it is open.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        close();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), textarea, a[href]',
+      );
+      if (!focusables || focusables.length === 0) return;
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      const active = panelRef.current?.getRootNode() as ShadowRoot | Document;
+      const current = (active as ShadowRoot).activeElement;
+      if (!event.shiftKey && current === last) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && current === first) {
+        event.preventDefault();
+        last.focus();
+      }
+    };
+    const root = panelRef.current;
+    root?.addEventListener('keydown', onKeyDown);
+    return () => root?.removeEventListener('keydown', onKeyDown);
+  }, [open, close]);
 
   const canSend = useMemo(() => draft.trim().length > 0 && !streaming, [draft, streaming]);
 
@@ -28,50 +85,127 @@ export function CopilotWidget({ ui, messages, streaming, onSend }: CopilotWidget
     const text = draft.trim();
     if (!text || streaming) return;
     setDraft('');
+    pinnedToBottom.current = true;
     onSend(text);
     setOpen(true);
   };
+
+  const copy = async (message: ChatMessage) => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopiedId(message.id);
+      setTimeout(() => setCopiedId(null), 1500);
+    } catch {
+      // Clipboard denied — silently ignore rather than showing a scary error.
+    }
+  };
+
+  const lastAssistantId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]!.role === 'assistant') return messages[i]!.id;
+    }
+    return null;
+  }, [messages]);
 
   return (
     <>
       <button
         type="button"
+        ref={launcherRef}
         className="launcher"
-        aria-label="Open AI Copilot"
+        aria-label={t('openLabel')}
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        AI
+        {ui?.logoUrl ? <img src={ui.logoUrl} alt="" /> : (ui?.launcherText || t('launcher'))}
       </button>
+
       <div
         className="panel"
+        ref={panelRef}
         hidden={!open}
         role="dialog"
+        aria-modal="true"
         aria-label={title}
         data-streaming={streaming ? 'true' : 'false'}
       >
         <div className="header">
+          {ui?.logoUrl ? <img src={ui.logoUrl} alt="" /> : null}
           <h1>{title}</h1>
-          <button type="button" aria-label="Close" onClick={() => setOpen(false)}>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => {
+              if (messages.length === 0) return;
+              if (typeof window !== 'undefined' && !window.confirm(t('clearConfirm'))) return;
+              onClear();
+            }}
+          >
+            {t('clear')}
+          </button>
+          <button type="button" className="icon-button close" aria-label={t('closeLabel')} onClick={close}>
             ×
           </button>
         </div>
-        <div className="messages" ref={listRef}>
-          {messages.length === 0 ? (
-            <div className="empty">
-              问我当前页面上有什么按钮，或订单状态是什么。
-            </div>
+
+        <div
+          className="messages"
+          ref={listRef}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          }}
+        >
+          {restoring ? <div className="empty">{t('restoring')}</div> : null}
+
+          {!restoring && messages.length === 0 ? (
+            <div className="empty">{t('emptyState')}</div>
           ) : (
             messages.map((m) => (
-              <div key={m.id} className={`bubble ${m.role}`}>
-                {m.role === 'assistant' ? <Markdown>{m.content || '…'}</Markdown> : m.content}
+              <div key={m.id} className={`row ${m.role}`}>
+                <div className={`bubble ${m.status === 'error' ? 'error' : ''}`}>
+                  {m.role === 'assistant' ? (
+                    m.content ? (
+                      <Markdown>{m.content}</Markdown>
+                    ) : (
+                      <span className="typing" aria-label={t('thinking')}>
+                        <span />
+                        <span />
+                        <span />
+                      </span>
+                    )
+                  ) : (
+                    m.content
+                  )}
+                </div>
+
+                {m.role === 'assistant' && m.content && m.status !== 'pending' ? (
+                  <div className="row-actions">
+                    <button type="button" onClick={() => void copy(m)}>
+                      {copiedId === m.id ? t('copied') : t('copy')}
+                    </button>
+                    {retryable && m.id === lastAssistantId ? (
+                      <button type="button" onClick={onRetry}>
+                        {t('retry')}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ))
           )}
+
+          {/* Streaming text is announced politely rather than character by character. */}
+          <div className="sr-only" aria-live="polite" aria-atomic="false">
+            {streaming ? t('thinking') : ''}
+          </div>
         </div>
+
         <div className="composer">
           <textarea
+            ref={textareaRef}
             rows={2}
-            placeholder="输入问题…"
+            placeholder={t('placeholder')}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -81,9 +215,15 @@ export function CopilotWidget({ ui, messages, streaming, onSend }: CopilotWidget
               }
             }}
           />
-          <button type="button" disabled={!canSend} onClick={submit}>
-            发送
-          </button>
+          {streaming ? (
+            <button type="button" className="stop" onClick={onStop}>
+              {t('stop')}
+            </button>
+          ) : (
+            <button type="button" disabled={!canSend} onClick={submit}>
+              {t('send')}
+            </button>
+          )}
         </div>
       </div>
     </>

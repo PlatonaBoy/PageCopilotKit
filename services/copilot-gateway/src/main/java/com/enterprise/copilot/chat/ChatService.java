@@ -3,217 +3,250 @@ package com.enterprise.copilot.chat;
 import com.enterprise.copilot.api.ApiException;
 import com.enterprise.copilot.api.dto.ChatDtos.ChatRequest;
 import com.enterprise.copilot.audit.AuditRecord;
-import com.enterprise.copilot.audit.AuditRepository;
+import com.enterprise.copilot.audit.AuditService;
 import com.enterprise.copilot.auth.UserPrincipal;
 import com.enterprise.copilot.chat.PromptBuilder.BuiltPrompt;
 import com.enterprise.copilot.config.CopilotProperties;
+import com.enterprise.copilot.ratelimit.RateLimiter;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.beans.factory.ObjectProvider;
+import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import reactor.core.publisher.Flux;
 
 @Service
 public class ChatService {
 
   private static final Logger log = LoggerFactory.getLogger(ChatService.class);
+  private static final String DEGRADED_MESSAGE =
+      "AI 服务暂时不可用，请稍后重试。（已记录本次失败）";
 
   private final CopilotProperties properties;
   private final PromptBuilder promptBuilder;
-  private final AuditRepository auditRepository;
-  private final ChatClient chatClient;
-  private final boolean hasRealModel;
+  private final ThreadService threadService;
+  private final ModelClient modelClient;
+  private final MockAnswerService mockAnswerService;
+  private final AuditService auditService;
+  private final RateLimiter rateLimiter;
 
   public ChatService(
       CopilotProperties properties,
       PromptBuilder promptBuilder,
-      AuditRepository auditRepository,
-      ObjectProvider<ChatModel> chatModelProvider) {
+      ThreadService threadService,
+      ModelClient modelClient,
+      MockAnswerService mockAnswerService,
+      AuditService auditService,
+      RateLimiter rateLimiter) {
     this.properties = properties;
     this.promptBuilder = promptBuilder;
-    this.auditRepository = auditRepository;
-    ChatModel model = chatModelProvider.getIfAvailable();
-    this.hasRealModel = model != null;
-    this.chatClient = model == null ? null : ChatClient.create(model);
+    this.threadService = threadService;
+    this.modelClient = modelClient;
+    this.mockAnswerService = mockAnswerService;
+    this.auditService = auditService;
+    this.rateLimiter = rateLimiter;
   }
 
   public SseEmitter streamChat(UserPrincipal user, ChatRequest request) {
-    BuiltPrompt prompt = promptBuilder.build(user, request);
-    String threadId =
-        request.threadId() == null || request.threadId().isBlank()
-            ? "thr_" + UUID.randomUUID().toString().replace("-", "")
-            : request.threadId();
-    String traceId = "trc_" + UUID.randomUUID().toString().replace("-", "");
+    RateLimiter.Decision decision = rateLimiter.check(user.tenantId(), user.sub());
+    if (!decision.allowed()) {
+      throw new ApiException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          "rate_limited",
+          "Rate limit exceeded for "
+              + decision.scope()
+              + " ("
+              + decision.limit()
+              + "/min). Retry in "
+              + decision.retryAfterSeconds()
+              + "s");
+    }
 
-    SseEmitter emitter = new SseEmitter(Duration.ofMinutes(2).toMillis());
+    // Validation and thread resolution happen synchronously so contract errors surface as
+    // real HTTP status codes instead of an SSE error inside a 200 response.
+    ChatThread thread = threadService.resolveOrCreate(user, request.threadId(), request.appId());
+    List<ChatTurn> history = threadService.loadHistoryForPrompt(thread.getThreadId());
+    BuiltPrompt prompt = promptBuilder.build(user, request, history);
+
+    String traceId = "trc_" + UUID.randomUUID().toString().replace("-", "");
+    SseEmitter emitter = new SseEmitter(properties.getLlm().getTimeout().plusSeconds(30).toMillis());
+    AtomicBoolean clientGone = new AtomicBoolean(false);
+    emitter.onTimeout(() -> clientGone.set(true));
+    emitter.onError(ex -> clientGone.set(true));
+    emitter.onCompletion(() -> clientGone.set(true));
+
     long started = System.currentTimeMillis();
+    threadService.appendUserTurn(thread, request.message());
 
     Thread.startVirtualThread(
         () -> {
-          AtomicReference<StringBuilder> full = new AtomicReference<>(new StringBuilder());
+          MDC.put("traceId", traceId);
+          MDC.put("tenantId", user.tenantId());
+          MDC.put("threadId", thread.getThreadId());
+          StringBuilder full = new StringBuilder();
           try {
-            emit(emitter, "thread", Map.of("threadId", threadId));
+            emit(emitter, "thread", Map.of("threadId", thread.getThreadId()));
 
-            boolean useMock = properties.isMockLlm() || !hasRealModel;
-            if (useMock) {
-              streamMock(emitter, prompt, request, full);
+            if (modelClient.isMockMode()) {
+              streamMock(emitter, request, history, full, clientGone);
             } else {
-              streamModel(emitter, prompt, full);
+              modelClient.stream(
+                  prompt,
+                  chunk -> {
+                    if (clientGone.get()) {
+                      throw new ClientDisconnectedException();
+                    }
+                    full.append(chunk);
+                    emitQuietly(emitter, "text.delta", Map.of("delta", chunk));
+                  });
             }
 
-            String answer = full.get().toString();
+            String answer = full.toString();
             emit(emitter, "text.done", Map.of("content", answer));
             emit(emitter, "done", Map.of("traceId", traceId));
-            persistAudit(user, request, threadId, traceId, prompt.contextHash(), answer, started);
+            threadService.appendAssistantTurn(thread, answer);
+            audit(
+                user,
+                request,
+                thread,
+                traceId,
+                prompt,
+                answer,
+                AuditRecord.Status.SUCCESS,
+                null,
+                started);
+            emitter.complete();
+          } catch (ClientDisconnectedException ex) {
+            log.info("Client disconnected mid-stream; aborting upstream");
+            threadService.appendAssistantTurn(thread, full.toString());
+            audit(
+                user,
+                request,
+                thread,
+                traceId,
+                prompt,
+                full.toString(),
+                AuditRecord.Status.FAILED,
+                "client_disconnected",
+                started);
             emitter.complete();
           } catch (Exception ex) {
-            log.error("Chat stream failed traceId={}", traceId, ex);
-            try {
-              emit(
-                  emitter,
-                  "error",
-                  Map.of(
-                      "code",
-                      "model_error",
-                      "message",
-                      ex.getMessage() == null ? "model error" : ex.getMessage()));
-              emit(emitter, "done", Map.of("traceId", traceId));
-              // Prefer clean completion after structured SSE error — avoid
-              // completeWithError wiping a usable client-side parse.
-              emitter.complete();
-            } catch (Exception ignored) {
-              emitter.completeWithError(ex);
-            }
+            handleFailure(emitter, user, request, thread, traceId, prompt, full, ex, started);
+          } finally {
+            MDC.clear();
           }
         });
 
     return emitter;
   }
 
-  private void streamModel(SseEmitter emitter, BuiltPrompt prompt, AtomicReference<StringBuilder> full)
-      throws IOException {
-    Flux<String> flux =
-        chatClient.prompt().system(prompt.system()).user(prompt.user()).stream().content();
+  private void handleFailure(
+      SseEmitter emitter,
+      UserPrincipal user,
+      ChatRequest request,
+      ChatThread thread,
+      String traceId,
+      BuiltPrompt prompt,
+      StringBuilder full,
+      Exception ex,
+      long started) {
+    String code =
+        ex instanceof ModelClient.ModelUnavailableException mue ? mue.getCode() : "internal_error";
+    log.error("Chat stream failed code={}", code, ex);
 
-    flux.toStream()
-        .forEach(
-            chunk -> {
-              if (chunk == null || chunk.isEmpty()) {
-                return;
-              }
-              full.get().append(chunk);
-              try {
-                emit(emitter, "text.delta", Map.of("delta", chunk));
-              } catch (IOException e) {
-                throw new RuntimeException(e);
-              }
-            });
+    String answer = full.length() > 0 ? full.toString() : DEGRADED_MESSAGE;
+    try {
+      if (full.length() == 0) {
+        // Nothing streamed yet — give the user a readable fallback instead of an empty bubble.
+        emit(emitter, "text.delta", Map.of("delta", DEGRADED_MESSAGE));
+      }
+      emit(emitter, "error", Map.of("code", code, "message", safeMessage(ex)));
+      emit(emitter, "done", Map.of("traceId", traceId));
+      emitter.complete();
+    } catch (Exception ignored) {
+      emitter.completeWithError(ex);
+    }
+
+    audit(user, request, thread, traceId, prompt, answer, AuditRecord.Status.FAILED, code, started);
+  }
+
+  private void audit(
+      UserPrincipal user,
+      ChatRequest request,
+      ChatThread thread,
+      String traceId,
+      BuiltPrompt prompt,
+      String answer,
+      AuditRecord.Status status,
+      String errorCode,
+      long started) {
+    auditService.record(
+        user,
+        request.appId(),
+        thread.getThreadId(),
+        traceId,
+        request.message(),
+        prompt.contextHash(),
+        answer,
+        modelClient.modelLabel(),
+        status,
+        errorCode,
+        System.currentTimeMillis() - started);
   }
 
   private void streamMock(
       SseEmitter emitter,
-      BuiltPrompt prompt,
       ChatRequest request,
-      AtomicReference<StringBuilder> full)
+      List<ChatTurn> history,
+      StringBuilder full,
+      AtomicBoolean clientGone)
       throws IOException, InterruptedException {
-    String answer = buildMockAnswer(request);
-    // stream in small chunks for demo UX
+    String answer = mockAnswerService.answer(request, history);
     int i = 0;
     while (i < answer.length()) {
+      if (clientGone.get()) {
+        throw new ClientDisconnectedException();
+      }
       int end = Math.min(answer.length(), i + 12);
       String chunk = answer.substring(i, end);
-      full.get().append(chunk);
+      full.append(chunk);
       emit(emitter, "text.delta", Map.of("delta", chunk));
-      Thread.sleep(18);
+      Thread.sleep(15);
       i = end;
     }
   }
 
-  private String buildMockAnswer(ChatRequest request) {
-    String status = null;
-    String orderId = null;
-    if (request.businessContext() != null) {
-      Object s = request.businessContext().get("status");
-      Object o = request.businessContext().get("orderId");
-      status = s == null ? null : String.valueOf(s);
-      orderId = o == null ? null : String.valueOf(o);
+  private static String safeMessage(Exception ex) {
+    if (ex instanceof ModelClient.ModelUnavailableException) {
+      return ex.getMessage();
     }
-    String title =
-        request.pageContext() == null || request.pageContext().title() == null
-            ? "当前页面"
-            : request.pageContext().title();
-    String buttons = "(无)";
-    if (request.pageContext() != null
-        && request.pageContext().actionableElements() != null
-        && !request.pageContext().actionableElements().isEmpty()) {
-      buttons =
-          request.pageContext().actionableElements().stream()
-              .map(el -> el.name() == null ? el.role() : el.name())
-              .reduce((a, b) -> a + "、" + b)
-              .orElse("(无)");
-    }
-
-    String q = request.message() == null ? "" : request.message();
-    if (q.contains("按钮") || q.toLowerCase().contains("button")) {
-      return "当前页面「" + title + "」上我识别到的可操作按钮/控件包括：" + buttons + "。";
-    }
-    if (status != null && (q.contains("状态") || q.toLowerCase().contains("status"))) {
-      return "根据业务上下文，订单 "
-          + (orderId == null ? "" : orderId + " ")
-          + "当前状态为「"
-          + status
-          + "」。页面标题为「"
-          + title
-          + "」。";
-    }
-    return "我已结合页面「"
-        + title
-        + "」与业务上下文回答（Mock LLM）。"
-        + (status == null ? "" : " 订单状态：" + status + "。")
-        + " 可操作控件："
-        + buttons
-        + "。你问的是："
-        + q;
-  }
-
-  private void persistAudit(
-      UserPrincipal user,
-      ChatRequest request,
-      String threadId,
-      String traceId,
-      String contextHash,
-      String answer,
-      long started) {
-    AuditRecord record = new AuditRecord();
-    record.setTraceId(traceId);
-    record.setUserSub(user.sub());
-    record.setTenantId(user.tenantId());
-    record.setAppId(request.appId());
-    record.setThreadId(threadId);
-    record.setQuestion(request.message());
-    record.setContextHash(contextHash);
-    record.setAnswer(answer);
-    record.setModel(properties.isMockLlm() || !hasRealModel ? "mock" : "openai-compatible");
-    record.setLatencyMs(System.currentTimeMillis() - started);
-    auditRepository.save(record);
+    // Never surface internal stack details to the browser.
+    return "Upstream model error";
   }
 
   private static void emit(SseEmitter emitter, String event, Object data) throws IOException {
     emitter.send(SseEmitter.event().name(event).data(data, MediaType.APPLICATION_JSON));
   }
 
-  public void rejectToolResult() {
-    throw new ApiException(
-        HttpStatus.NOT_IMPLEMENTED, "not_implemented", "Tool result endpoint is phase 2");
+  private static void emitQuietly(SseEmitter emitter, String event, Object data) {
+    try {
+      emit(emitter, event, data);
+    } catch (IOException ex) {
+      throw new ClientDisconnectedException();
+    }
+  }
+
+  /** Raised when the browser hangs up so we can stop pulling from the model. */
+  static class ClientDisconnectedException extends RuntimeException {
+    ClientDisconnectedException() {
+      super("client disconnected", null, false, false);
+    }
   }
 }

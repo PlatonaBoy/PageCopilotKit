@@ -1,0 +1,21 @@
+# Local development / offline demo profile.
+# Enables the unauthenticated token endpoint and permissive CORS. Never use in production.
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/copilot;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  h2:
+    console:
+      enabled: false
+
+copilot:
+  jwt-secret: ${COPILOT_JWT_SECRET:dev-only-copilot-secret-key-32bytes!!}
+  cors-allow-all-patterns: true
+  llm:
+    mock: ${COPILOT_MOCK_LLM:true}
+
+logging:
+  level:
+    com.enterprise.copilot: DEBUG

@@ -36,6 +36,10 @@
           <div id="order-status" class="status">待审批</div>
         </div>
         <div class="field">
+          <label>客户等级</label>
+          <div>VIP</div>
+        </div>
+        <div class="field">
           <label>申请人</label>
           <div>李四</div>
         </div>
@@ -52,6 +56,20 @@
         <a href="#history" id="link-history">查看历史</a>
       </div>
 
+      <section class="lines">
+        <h2>订单明细</h2>
+        <table>
+          <caption>本次发货清单</caption>
+          <thead>
+            <tr><th>商品</th><th>规格</th><th>数量</th><th>小计</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>热轧钢板</td><td>3mm</td><td>20 吨</td><td>¥ 36,000.00</td></tr>
+            <tr><td>冷轧卷板</td><td>1.5mm</td><td>8 吨</td><td>¥ 14,000.00</td></tr>
+          </tbody>
+        </table>
+      </section>
+
       <section id="history" class="history">
         <h2>审批历史</h2>
         <ul>
@@ -59,7 +77,15 @@
           <li>2026-07-18 10:05 · 系统 进入待审批</li>
         </ul>
       </section>
+
+      <!-- Excluded from the copilot's page snapshot. -->
+      <section class="internal" data-copilot-ignore>
+        <h2>内部调试信息</h2>
+        <p>该区块标记了 data-copilot-ignore，不会进入 AI 上下文。</p>
+      </section>
     </main>
+
+    <div id="toast" class="toast" role="status" hidden></div>
 
     <!-- Built SDK IIFE -->
     <script src="/vendor/enterprise-copilot.js"></script>

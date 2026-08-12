@@ -1,13 +1,18 @@
 package com.enterprise.copilot.config;
 
 import com.enterprise.copilot.auth.JwtAuthInterceptor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
+
+  private static final Logger log = LoggerFactory.getLogger(WebConfig.class);
 
   private final CopilotProperties properties;
   private final JwtAuthInterceptor jwtAuthInterceptor;
@@ -19,23 +24,27 @@ public class WebConfig implements WebMvcConfigurer {
 
   @Override
   public void addCorsMappings(CorsRegistry registry) {
-    String[] origins = properties.getCorsAllowedOrigins().toArray(String[]::new);
-    var registration =
+    CorsRegistration registration =
         registry
             .addMapping("/v1/**")
-            .allowedMethods("GET", "POST", "OPTIONS")
-            .allowedHeaders("*")
+            .allowedMethods("GET", "POST", "DELETE", "OPTIONS")
+            .allowedHeaders("Authorization", "Content-Type", "Accept")
+            .exposedHeaders("X-Trace-Id")
             .allowCredentials(true)
             .maxAge(3600);
 
-    // Prefer patterns so LAN IPs / Cursor port-forward hosts work in demo.
-    // Explicit list still honored when it does not contain the wildcard pattern.
-    if (properties.isCorsAllowAllPatterns()
-        || (origins.length == 1 && "*".equals(origins[0]))) {
+    if (properties.isCorsAllowAllPatterns()) {
+      log.warn("CORS is configured to allow ALL origins — never enable this in production");
       registration.allowedOriginPatterns("*");
-    } else {
-      registration.allowedOriginPatterns(origins);
+      return;
     }
+
+    String[] origins = properties.getCorsAllowedOrigins().toArray(String[]::new);
+    if (origins.length == 0) {
+      log.warn("copilot.cors-allowed-origins is empty — browser requests will be rejected");
+      return;
+    }
+    registration.allowedOriginPatterns(origins);
   }
 
   @Override
@@ -43,6 +52,8 @@ public class WebConfig implements WebMvcConfigurer {
     registry
         .addInterceptor(jwtAuthInterceptor)
         .addPathPatterns("/v1/**")
-        .excludePathPatterns("/v1/health", "/v1/demo/token", "/v1/demo/audits");
+        // Health and demo-token minting are the only unauthenticated surfaces.
+        // Demo endpoints are additionally gated behind the `dev` profile.
+        .excludePathPatterns("/v1/health", "/v1/demo/token");
   }
 }

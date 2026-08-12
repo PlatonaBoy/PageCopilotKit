@@ -1,46 +1,86 @@
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  error:
+    include-stacktrace: never
+    include-message: never
 
 spring:
   application:
     name: copilot-gateway
-  datasource:
-    url: jdbc:h2:file:./data/copilot;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  jpa:
-    hibernate:
-      ddl-auto: update
-    open-in-view: false
-  h2:
-    console:
+  profiles:
+    default: dev
+  threads:
+    virtual:
       enabled: true
-      path: /h2
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.batch_size: 20
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
   ai:
     openai:
-      api-key: ${OPENAI_API_KEY:sk-mock}
+      api-key: ${OPENAI_API_KEY:not-set}
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       chat:
         options:
           model: ${OPENAI_MODEL:gpt-4o-mini}
-          temperature: 0.3
+          temperature: 0.2
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
 
 copilot:
-  jwt-secret: ${COPILOT_JWT_SECRET:dev-copilot-jwt-secret-change-me-32b}
-  jwt-issuer: enterprise-copilot
-  allowed-app-ids: crm,demo
-  cors-allowed-origins: http://localhost:5173,http://127.0.0.1:5173
-  demo-token-enabled: true
-  # When true (or api-key is sk-mock), gateway streams a deterministic mock answer
-  mock-llm: ${COPILOT_MOCK_LLM:true}
-  # Allow any browser Origin in local/demo (LAN IP, Cursor port-forward hosts)
-  cors-allow-all-patterns: ${COPILOT_CORS_ALLOW_ALL:true}
+  # No default: a weak or missing secret must fail startup rather than ship silently.
+  jwt-secret: ${COPILOT_JWT_SECRET:}
+  jwt-issuer: ${COPILOT_JWT_ISSUER:enterprise-copilot}
+  jwt-require-issuer: true
+  jwt-clock-skew: 30s
+  allowed-app-ids: ${COPILOT_ALLOWED_APP_IDS:crm,demo}
+  cors-allowed-origins: ${COPILOT_CORS_ORIGINS:}
+  cors-allow-all-patterns: false
+  llm:
+    mock: ${COPILOT_MOCK_LLM:true}
+    timeout: ${COPILOT_LLM_TIMEOUT:45s}
+    max-retries: 2
+    retry-backoff: 400ms
+    breaker-failure-threshold: 5
+    breaker-open-duration: 30s
+  rate-limit:
+    enabled: true
+    per-user-per-minute: ${COPILOT_RATE_USER:20}
+    per-tenant-per-minute: ${COPILOT_RATE_TENANT:200}
+  history:
+    max-turns: 8
+    max-chars: 6000
+    retain-messages: 200
   context:
     max-business-bytes: 4096
     max-summary-chars: 12000
     max-actionable-elements: 40
+    max-message-chars: 4000
+    max-selection-chars: 2000
+    max-prompt-chars: 24000
 
 logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{traceId:-}] [%X{tenantId:-}] %logger{36} - %msg%n"
   level:
     com.enterprise.copilot: INFO

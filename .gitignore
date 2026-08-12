@@ -4,8 +4,18 @@ dist/
 .DS_Store
 .env
 .env.*
-services/copilot-gateway/data/
+!.env.example
+
+# Java
 services/copilot-gateway/target/
+services/copilot-gateway/data/
+
+# E2E
+tests/e2e/node_modules/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+
+# Editors
 .idea/
 .vscode/
 *.iml

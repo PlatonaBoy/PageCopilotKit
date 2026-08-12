@@ -131,9 +131,67 @@ button.secondary {
   color: var(--accent);
 }
 
+.lines,
+.history,
+.internal {
+  margin-bottom: 24px;
+}
+
+.lines h2,
+.internal h2,
 .history h2 {
   font-size: 18px;
   margin: 0 0 12px;
+}
+
+.lines table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.lines caption {
+  text-align: left;
+  color: var(--muted);
+  font-size: 13px;
+  padding-bottom: 6px;
+}
+
+.lines th,
+.lines td {
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.lines th {
+  background: #f3f7fb;
+  font-weight: 600;
+}
+
+.internal {
+  padding: 12px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  background: rgba(21, 32, 51, 0.92);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  z-index: 100;
+}
+
+.toast[hidden] {
+  display: none;
 }
 
 .history ul {
