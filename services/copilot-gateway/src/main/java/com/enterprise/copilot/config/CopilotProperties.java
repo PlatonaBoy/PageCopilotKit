@@ -22,6 +22,7 @@ public class CopilotProperties {
   private History history = new History();
   private Llm llm = new Llm();
   private RateLimit rateLimit = new RateLimit();
+  private Tools tools = new Tools();
 
   public String getJwtSecret() {
     return jwtSecret;
@@ -109,6 +110,14 @@ public class CopilotProperties {
 
   public void setRateLimit(RateLimit rateLimit) {
     this.rateLimit = rateLimit;
+  }
+
+  public Tools getTools() {
+    return tools;
+  }
+
+  public void setTools(Tools tools) {
+    this.tools = tools;
   }
 
   public static class Context {
@@ -273,6 +282,48 @@ public class CopilotProperties {
 
     public void setBreakerOpenDuration(Duration breakerOpenDuration) {
       this.breakerOpenDuration = breakerOpenDuration;
+    }
+  }
+
+  public static class Tools {
+    private boolean enabled = true;
+    /** Maximum tool round-trips the server will serve for one user turn. */
+    private int maxStepsPerTurn = 5;
+    /** appId -> allowed tool names. Empty means "any tool the client declares". */
+    private java.util.Map<String, List<String>> allowed = new java.util.LinkedHashMap<>();
+    /** tool name -> permission the caller's JWT must carry. */
+    private java.util.Map<String, String> requiredPermission = new java.util.LinkedHashMap<>();
+
+    public boolean isEnabled() {
+      return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+      this.enabled = enabled;
+    }
+
+    public int getMaxStepsPerTurn() {
+      return maxStepsPerTurn;
+    }
+
+    public void setMaxStepsPerTurn(int maxStepsPerTurn) {
+      this.maxStepsPerTurn = maxStepsPerTurn;
+    }
+
+    public java.util.Map<String, List<String>> getAllowed() {
+      return allowed;
+    }
+
+    public void setAllowed(java.util.Map<String, List<String>> allowed) {
+      this.allowed = allowed;
+    }
+
+    public java.util.Map<String, String> getRequiredPermission() {
+      return requiredPermission;
+    }
+
+    public void setRequiredPermission(java.util.Map<String, String> requiredPermission) {
+      this.requiredPermission = requiredPermission;
     }
   }
 

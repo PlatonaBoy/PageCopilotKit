@@ -79,10 +79,16 @@ public class ThreadService {
     return selected;
   }
 
+  /**
+   * Turns for UI restore. Tool call/result turns are internal reasoning steps, so only the visible
+   * conversation is returned — the client renders chat bubbles, not a trace.
+   */
   @Transactional(readOnly = true)
   public List<ChatTurn> loadAll(UserPrincipal user, String threadId) {
     requireOwned(user, threadId);
-    return turns.findByThreadIdOrderByIdAsc(threadId);
+    return turns.findByThreadIdOrderByIdAsc(threadId).stream()
+        .filter(t -> t.getRole() == ChatTurn.Role.USER || t.getRole() == ChatTurn.Role.ASSISTANT)
+        .toList();
   }
 
   @Transactional
@@ -103,6 +109,46 @@ public class ThreadService {
     thread.touch();
     threads.save(thread);
     pruneIfNeeded(thread.getThreadId());
+  }
+
+  @Transactional
+  public void appendToolCallTurn(ChatThread thread, String toolName, String argumentsJson) {
+    turns.save(
+        ChatTurn.of(
+            thread.getThreadId(),
+            ChatTurn.Role.TOOL_CALL,
+            toolName + " " + (argumentsJson == null ? "{}" : argumentsJson)));
+    thread.touch();
+    threads.save(thread);
+  }
+
+  @Transactional
+  public void appendToolResultTurn(ChatThread thread, String toolName, String outcome) {
+    turns.save(
+        ChatTurn.of(thread.getThreadId(), ChatTurn.Role.TOOL_RESULT, toolName + ": " + outcome));
+    thread.touch();
+    threads.save(thread);
+    pruneIfNeeded(thread.getThreadId());
+  }
+
+  /**
+   * Number of tool calls since the last user message — the server-side guard against a model that
+   * keeps acting instead of answering.
+   */
+  @Transactional(readOnly = true)
+  public int countToolCallsInCurrentTurn(String threadId) {
+    List<ChatTurn> all = turns.findByThreadIdOrderByIdAsc(threadId);
+    int count = 0;
+    for (int i = all.size() - 1; i >= 0; i -= 1) {
+      ChatTurn turn = all.get(i);
+      if (turn.getRole() == ChatTurn.Role.USER) {
+        break;
+      }
+      if (turn.getRole() == ChatTurn.Role.TOOL_CALL) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   @Transactional

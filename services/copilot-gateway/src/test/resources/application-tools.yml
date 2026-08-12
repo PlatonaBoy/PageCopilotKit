@@ -1,0 +1,34 @@
+# Profile for the tool-calling integration test: offline planner plus a strict tool policy.
+spring:
+  datasource:
+    url: jdbc:h2:mem:copilot-tools;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  flyway:
+    enabled: true
+
+copilot:
+  jwt-secret: test-secret-key-with-at-least-32-bytes!!
+  cors-allowed-origins: http://localhost:5173
+  cors-allow-all-patterns: false
+  llm:
+    mock: true
+  rate-limit:
+    enabled: false
+  tools:
+    enabled: true
+    max-steps-per-turn: 3
+    allowed:
+      # `deleteEverything` is deliberately absent so the allowlist path is exercised.
+      crm:
+        - approveOrder
+        - page_click
+        - page_fill
+        - page_read
+    required-permission:
+      approveOrder: order:approve
+
+logging:
+  level:
+    com.enterprise.copilot: WARN

@@ -22,7 +22,18 @@ export type MessageKey =
   | 'errorRateLimited'
   | 'errorTooLarge'
   | 'errorModel'
-  | 'errorUnknown';
+  | 'errorUnknown'
+  | 'confirmTitle'
+  | 'confirmHint'
+  | 'approve'
+  | 'decline'
+  | 'toolRunning'
+  | 'toolDone'
+  | 'toolRejected'
+  | 'toolFailed'
+  | 'toolUnknown'
+  | 'toolStepLimit'
+  | 'errorToolForbidden';
 
 type Catalog = Record<MessageKey, string>;
 
@@ -51,6 +62,17 @@ const ZH: Catalog = {
   errorTooLarge: '页面内容过大，无法处理。',
   errorModel: 'AI 服务暂时不可用，请稍后重试。',
   errorUnknown: '请求失败，请重试。',
+  confirmTitle: '需要你确认这个操作',
+  confirmHint: '该操作会修改数据或提交表单，确认后才会执行。',
+  approve: '确认执行',
+  decline: '取消',
+  toolRunning: '正在执行',
+  toolDone: '已执行',
+  toolRejected: '已取消（用户未确认）',
+  toolFailed: '执行失败',
+  toolUnknown: '该操作未在本页面注册，已拒绝',
+  toolStepLimit: '连续操作步数过多，已中止。请拆分成更小的请求。',
+  errorToolForbidden: '当前账号没有执行该操作的权限。',
 };
 
 const EN: Catalog = {
@@ -79,6 +101,17 @@ const EN: Catalog = {
   errorTooLarge: 'This page is too large to process.',
   errorModel: 'The AI service is temporarily unavailable. Please retry.',
   errorUnknown: 'Request failed. Please retry.',
+  confirmTitle: 'Confirm this action',
+  confirmHint: 'This changes data or submits a form. It runs only after you approve.',
+  approve: 'Approve',
+  decline: 'Cancel',
+  toolRunning: 'Running',
+  toolDone: 'Done',
+  toolRejected: 'Cancelled (not approved)',
+  toolFailed: 'Failed',
+  toolUnknown: 'This action is not registered on the page and was rejected',
+  toolStepLimit: 'Too many consecutive actions; stopped. Please split the request.',
+  errorToolForbidden: 'Your account is not allowed to perform this action.',
 };
 
 const CATALOGS: Record<string, Catalog> = {
@@ -120,6 +153,10 @@ export function errorMessageKey(code: string): MessageKey {
     case 'breaker_open':
     case 'model_stream_interrupted':
       return 'errorModel';
+    case 'tool_forbidden':
+      return 'errorToolForbidden';
+    case 'tool_step_limit':
+      return 'toolStepLimit';
     default:
       return 'errorUnknown';
   }

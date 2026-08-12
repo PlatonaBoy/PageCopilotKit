@@ -52,7 +52,15 @@ Starts or continues a conversation. Responds with **SSE** (`text/event-stream`).
     "orderId": "ORD-123456",
     "status": "待审批",
     "amount": 50000
-  }
+  },
+  "clientTools": [
+    {
+      "name": "approveOrder",
+      "description": "审批当前订单",
+      "parameters": { "type": "object", "properties": { "orderId": { "type": "string" } } },
+      "risk": "write"
+    }
+  ]
 }
 ```
 
@@ -62,8 +70,15 @@ Starts or continues a conversation. Responds with **SSE** (`text/event-stream`).
 | `threadId` | no | Omit to start a new thread. Must belong to the caller. |
 | `message` | yes | Max 8000 chars at the API, truncated to 4000 for the prompt. |
 | `pageContext` | no | Produced by the SDK's PageEngine. |
+| `pageContext.actionableElements[].ref` | no | Opaque handle a page action can target. |
 | `pageContext.selection` | no | Text the user highlighted; prioritized in the answer. |
 | `businessContext` | no | Authoritative app facts. **Max 4KB** or the request is rejected. |
+| `clientTools` | no | Capabilities the browser can execute this turn. Max 40. |
+
+Declaring a tool is not authorization: the gateway intersects `clientTools` with its own allowlist and
+the caller's JWT permissions, and only the survivors reach the model. See [actions.md](actions.md).
+
+Send `Accept: text/event-stream, application/json` — the stream is SSE but contract errors are JSON.
 
 Contract errors (unknown `appId`, oversized context, rate limit, unknown thread) are returned as
 **real HTTP status codes before the stream opens**, not as SSE events.
@@ -81,8 +96,12 @@ data: <json>
 | `thread` | `{ "threadId": "thr_…" }` | Thread assigned. Persist it to resume later. |
 | `text.delta` | `{ "delta": "…" }` | Incremental answer text. |
 | `text.done` | `{ "content": "…" }` | Complete answer. |
+| `tool.call` | `{ "id", "name", "arguments" }` | The client must execute this and report back. |
 | `error` | `{ "code": "...", "message": "..." }` | Generation failed or degraded. |
 | `done` | `{ "traceId": "trc_…" }` | **End of turn.** Clients must stop reading here. |
+
+A turn that ends with `tool.call` is not finished: the client executes the tool (asking the user first
+when the risk requires it) and continues via the tool-result endpoint below.
 
 `done` is authoritative: the HTTP connection may stay open afterwards, so a client that waits for
 the socket to close will hang.
@@ -110,6 +129,35 @@ data: {"traceId":"trc_5f7a"}
 ```
 
 ---
+
+## `POST /v1/chat/{threadId}/tool-result`
+
+Reports the outcome of a tool the browser executed. The response is the **SSE continuation** of the
+same turn, so no stream is held open across a user confirmation.
+
+```json
+{
+  "appId": "crm",
+  "toolCallId": "call_abc",
+  "name": "approveOrder",
+  "result": { "orderId": "ORD-123456", "status": "审批中" },
+  "pageContext": { "url": "…", "title": "…", "summary": "…", "actionableElements": [] },
+  "businessContext": { "status": "审批中" },
+  "clientTools": []
+}
+```
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `toolCallId` | yes | The `id` from the `tool.call` event. |
+| `name` | yes | Tool that ran. |
+| `result` | no | Whatever the tool returned. Omit when it failed. |
+| `error` | no | Failure reason, or `user_declined: …` when the user refused. |
+| `pageContext` | no | **Fresh** snapshot — an action usually changed the DOM. |
+| `businessContext` | no | Re-read after the action. |
+
+Returns `404 thread_not_found` for another user's thread, and `409 tool_step_limit` when the turn has
+already used its tool-step budget.
 
 ## `GET /v1/threads/{threadId}/messages`
 
@@ -193,12 +241,17 @@ configuration alone.
 | 404 | `not_found` | Route not registered (e.g. dev-only endpoint in prod) |
 | 404 | `thread_not_found` | Thread missing **or owned by another user** |
 | 405 | `method_not_allowed` | Wrong HTTP method |
+| 409 | `tool_step_limit` | Turn exceeded `copilot.tools.max-steps-per-turn` |
 | 413 | `context_too_large` | `businessContext` over 4KB |
 | 429 | `rate_limited` | Per-user or per-tenant limit exceeded |
 | 500 | `internal_error` | Unexpected failure (no stack details exposed) |
 
 SSE-only codes (delivered as an `error` event on a `200` response): `model_error`, `breaker_open`,
-`model_stream_interrupted`, `client_disconnected`.
+`model_stream_interrupted`, `client_disconnected`, `tool_forbidden`, `tool_not_available`,
+`tool_not_allowed`, `tool_disabled`.
+
+Error bodies are always JSON with an explicit content type, even when the request's `Accept` only
+lists `text/event-stream`.
 
 ---
 

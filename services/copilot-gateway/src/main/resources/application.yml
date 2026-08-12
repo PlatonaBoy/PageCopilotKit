@@ -67,6 +67,17 @@ copilot:
     enabled: true
     per-user-per-minute: ${COPILOT_RATE_USER:20}
     per-tenant-per-minute: ${COPILOT_RATE_TENANT:200}
+  tools:
+    enabled: ${COPILOT_TOOLS_ENABLED:true}
+    max-steps-per-turn: 5
+    # Optional hardening. `allowed` restricts which tool names an application may use at all;
+    # `required-permission` demands a JWT permission before a tool may run. Example:
+    #   allowed:
+    #     crm: [approveOrder, page_click, page_fill, page_read]
+    #   required-permission:
+    #     approveOrder: order:approve
+    allowed: {}
+    required-permission: {}
   history:
     max-turns: 8
     max-chars: 6000

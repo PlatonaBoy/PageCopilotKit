@@ -157,6 +157,70 @@ button { font-family: inherit; }
   .messages { scroll-behavior: auto; }
 }
 
+/* Tool activity log — every action the assistant takes stays visible in the transcript. */
+.activity {
+  align-self: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #eef4fa;
+  border: 1px solid #d8e3ee;
+  color: var(--copilot-muted);
+}
+.activity.rejected { background: #fdf6ec; border-color: #f0dcbd; }
+.activity.failed { background: #fdf0f0; border-color: #f0c2c2; }
+.activity-status { font-weight: 600; color: var(--copilot-ink); }
+.activity-label { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+.activity-detail { width: 100%; color: #8a5a00; }
+.activity.failed .activity-detail { color: #a13d3d; }
+
+/* Confirmation card for write-risk actions. */
+.confirm {
+  align-self: stretch;
+  border: 1px solid #f0c98a;
+  background: #fffaf0;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.confirm-title { font-size: 14px; font-weight: 600; color: #8a5a00; }
+.confirm-action {
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+  color: var(--copilot-ink);
+}
+.confirm-args {
+  margin: 0;
+  max-height: 140px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid var(--copilot-line);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 12px;
+}
+.confirm-hint { font-size: 12px; color: var(--copilot-muted); }
+.confirm-buttons { display: flex; gap: 8px; }
+.confirm-buttons button {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.confirm-buttons .approve { background: var(--copilot-primary); color: #fff; }
+.confirm-buttons .decline { background: #e8eef5; color: var(--copilot-ink); }
+.confirm-buttons button:focus-visible { outline: 2px solid var(--copilot-ink); outline-offset: 2px; }
+
 .composer {
   display: flex;
   gap: 8px;
@@ -164,6 +228,7 @@ button { font-family: inherit; }
   border-top: 1px solid var(--copilot-line);
   background: #fff;
 }
+.composer textarea:disabled { background: #f4f6f9; cursor: not-allowed; }
 .composer textarea {
   flex: 1;
   resize: none;

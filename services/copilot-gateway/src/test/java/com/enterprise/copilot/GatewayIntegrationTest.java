@@ -106,6 +106,42 @@ class GatewayIntegrationTest {
         .andExpect(jsonPath("$.code").value("bad_request"));
   }
 
+  /**
+   * The SDK sends an SSE Accept header. Contract errors are JSON, so the handler must pin the
+   * content type — otherwise content negotiation turns every such error into an opaque 500.
+   */
+  @Test
+  void contractErrorsAreJsonEvenWhenTheClientOnlyAcceptsEventStream() throws Exception {
+    String body = objectMapper.writeValueAsString(Map.of("appId", "nope", "message", "hi"));
+
+    mockMvc
+        .perform(
+            post("/v1/chat")
+                .header("Authorization", "Bearer " + token("u1", "t1", List.of()))
+                .header("Accept", "text/event-stream")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("bad_request"));
+  }
+
+  @Test
+  void oversizedContextIsStillReportedWhenOnlyEventStreamIsAccepted() throws Exception {
+    String body =
+        objectMapper.writeValueAsString(
+            Map.of("appId", "crm", "message", "hi", "businessContext", Map.of("b", "x".repeat(6000))));
+
+    mockMvc
+        .perform(
+            post("/v1/chat")
+                .header("Authorization", "Bearer " + token("u1", "t1", List.of()))
+                .header("Accept", "text/event-stream")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isPayloadTooLarge())
+        .andExpect(jsonPath("$.code").value("context_too_large"));
+  }
+
   @Test
   void oversizedBusinessContextIsRejected() throws Exception {
     String body =

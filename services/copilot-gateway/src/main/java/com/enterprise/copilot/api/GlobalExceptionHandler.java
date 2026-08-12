@@ -6,6 +6,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -22,7 +23,7 @@ public class GlobalExceptionHandler {
 
   @ExceptionHandler(ApiException.class)
   public ResponseEntity<Map<String, Object>> handleApi(ApiException ex) {
-    return ResponseEntity.status(ex.getStatus()).body(body(ex.getCode(), ex.getMessage()));
+    return error(ex.getStatus(), ex.getCode(), ex.getMessage());
   }
 
   @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -32,12 +33,12 @@ public class GlobalExceptionHandler {
             .findFirst()
             .map(err -> err.getField() + " " + err.getDefaultMessage())
             .orElse("Validation failed");
-    return ResponseEntity.badRequest().body(body("bad_request", message));
+    return error(HttpStatus.BAD_REQUEST, "bad_request", message);
   }
 
   @ExceptionHandler(HttpMessageNotReadableException.class)
   public ResponseEntity<Map<String, Object>> handleUnreadable(HttpMessageNotReadableException ex) {
-    return ResponseEntity.badRequest().body(body("bad_request", "Malformed request body"));
+    return error(HttpStatus.BAD_REQUEST, "bad_request", "Malformed request body");
   }
 
   /**
@@ -46,14 +47,13 @@ public class GlobalExceptionHandler {
    */
   @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
   public ResponseEntity<Map<String, Object>> handleNotFound(Exception ex) {
-    return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body("not_found", "Endpoint not found"));
+    return error(HttpStatus.NOT_FOUND, "not_found", "Endpoint not found");
   }
 
   @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
   public ResponseEntity<Map<String, Object>> handleMethodNotAllowed(
       HttpRequestMethodNotSupportedException ex) {
-    return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
-        .body(body("method_not_allowed", "Method not allowed"));
+    return error(HttpStatus.METHOD_NOT_ALLOWED, "method_not_allowed", "Method not allowed");
   }
 
   /** Catch-all so clients always receive the documented error envelope, never a raw stack trace. */
@@ -61,14 +61,21 @@ public class GlobalExceptionHandler {
   public ResponseEntity<Map<String, Object>> handleUnexpected(
       Exception ex, HttpServletRequest request) {
     log.error("Unhandled error on {} {}", request.getMethod(), request.getRequestURI(), ex);
-    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-        .body(body("internal_error", "Unexpected server error"));
+    return error(HttpStatus.INTERNAL_SERVER_ERROR, "internal_error", "Unexpected server error");
   }
 
-  private static Map<String, Object> body(String code, String message) {
+  /**
+   * Pins the response to JSON.
+   *
+   * <p>The chat endpoints declare {@code produces=text/event-stream}, and clients send a matching
+   * {@code Accept}. Without an explicit content type Spring would find no acceptable representation
+   * for this JSON body and turn every contract error into an opaque 500.
+   */
+  private static ResponseEntity<Map<String, Object>> error(
+      HttpStatus status, String code, String message) {
     Map<String, Object> out = new LinkedHashMap<>();
     out.put("code", code);
     out.put("message", message);
-    return out;
+    return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(out);
   }
 }

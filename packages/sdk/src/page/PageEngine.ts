@@ -1,11 +1,15 @@
 import type { ActionableElement, PageContextSnapshot } from '../types';
+import { ElementRegistry, accessibleName, isDisabled, isVisible } from './elementRegistry';
 
 /**
  * PageEngine — page perception for Enterprise Copilot.
  *
- * Extracts a dehydrated, structured view of the live DOM: headings, tables, form fields, the user's
+ * Extracts a dehydrated, structured view of the live DOM: headings, fields, tables, the user's
  * selection, and the interactive controls available. Structure is preserved (tables become Markdown,
  * forms become label/value pairs) because a flat text dump makes the model guess at relationships.
+ *
+ * Each interactive control gets a `ref` so page actions can target it; the registry re-verifies the
+ * element before any action runs.
  *
  * Scope: the current document only. Cross-origin iframes and deep shadow roots are out of scope;
  * hosts can exclude regions with `data-copilot-ignore`.
@@ -43,6 +47,8 @@ const REDACTIONS: Array<[RegExp, string]> = [
 ];
 
 export class PageEngine {
+  readonly registry = new ElementRegistry();
+
   private stale = true;
   private cache: PageContextSnapshot | null = null;
   private observer: MutationObserver | null = null;
@@ -87,6 +93,7 @@ export class PageEngine {
     this.started = false;
     this.cache = null;
     this.stale = true;
+    this.registry.clear();
   }
 
   invalidate = (): void => {
@@ -100,10 +107,56 @@ export class PageEngine {
       // Selection changes constantly and is cheap, so refresh it without re-scanning the DOM.
       return { ...this.cache, selection };
     }
-    const snap = captureSnapshot(selection);
+    const snap = this.capture(selection);
     this.cache = snap;
     this.stale = false;
     return snap;
+  }
+
+  /** Forces a fresh capture, e.g. right after a page action changed the DOM. */
+  async refresh(): Promise<PageContextSnapshot> {
+    this.invalidate();
+    return this.snapshot();
+  }
+
+  private capture(selection: string): PageContextSnapshot {
+    // A new generation invalidates refs from the previous snapshot on purpose: acting on a stale
+    // ref would risk targeting a re-rendered element.
+    this.registry.begin();
+    const actionableElements = this.collectActionable();
+    const summary = buildSummary(actionableElements);
+    return {
+      url: location.href,
+      title: document.title || '',
+      summary,
+      actionableElements,
+      selection,
+    };
+  }
+
+  private collectActionable(): ActionableElement[] {
+    const nodes = Array.from(document.querySelectorAll<HTMLElement>(INTERACTIVE_SELECTOR));
+    const inViewport: HTMLElement[] = [];
+    const offscreen: HTMLElement[] = [];
+
+    for (const el of nodes) {
+      if (isIgnored(el) || !isVisible(el) || isSensitiveInput(el)) continue;
+      if (!accessibleName(el)) continue;
+      (isInViewport(el) ? inViewport : offscreen).push(el);
+      if (inViewport.length + offscreen.length >= MAX_ELEMENTS * 3) break;
+    }
+
+    // Controls the user can actually see matter more than those far down the page.
+    return [...inViewport, ...offscreen].slice(0, MAX_ELEMENTS).map((el) =>
+      this.registry.register(el, {
+        name: accessibleName(el).slice(0, 80),
+        role: el.getAttribute('role') || el.tagName.toLowerCase(),
+        hint: el.getAttribute('data-action') || el.getAttribute('name') || el.id || undefined,
+        kind: kindOf(el),
+        disabled: isDisabled(el) || undefined,
+        value: readableValue(el),
+      }),
+    );
   }
 
   private scheduleInvalidate(): void {
@@ -136,16 +189,38 @@ export class PageEngine {
   }
 }
 
-function captureSnapshot(selection: string): PageContextSnapshot {
-  const actionableElements = collectActionable();
-  const summary = buildSummary(actionableElements);
-  return {
-    url: location.href,
-    title: document.title || '',
-    summary,
-    actionableElements,
-    selection,
-  };
+function kindOf(el: HTMLElement): ActionableElement['kind'] {
+  if (el instanceof HTMLSelectElement) return 'select';
+  if (el instanceof HTMLTextAreaElement) return 'text';
+  if (el instanceof HTMLInputElement) {
+    if (el.type === 'checkbox') return 'checkbox';
+    if (el.type === 'radio') return 'radio';
+    if (el.type === 'button' || el.type === 'submit' || el.type === 'reset') return 'button';
+    return 'text';
+  }
+  if (el instanceof HTMLButtonElement) return 'button';
+  const role = el.getAttribute('role');
+  if (role === 'button') return 'button';
+  if (el instanceof HTMLAnchorElement || role === 'link') return 'link';
+  return 'other';
+}
+
+function readableValue(el: HTMLElement): string | undefined {
+  if (isSensitiveInput(el)) return undefined;
+  if (el instanceof HTMLInputElement) {
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      return el.checked ? 'checked' : 'unchecked';
+    }
+    return el.value ? sanitizeText(el.value).slice(0, 120) : undefined;
+  }
+  if (el instanceof HTMLTextAreaElement) {
+    return el.value ? sanitizeText(el.value).slice(0, 120) : undefined;
+  }
+  if (el instanceof HTMLSelectElement) {
+    const selected = el.selectedOptions[0]?.textContent?.trim();
+    return selected ? sanitizeText(selected).slice(0, 120) : undefined;
+  }
+  return undefined;
 }
 
 function captureSelection(): string {
@@ -153,31 +228,6 @@ function captureSelection(): string {
   const text = window.getSelection()?.toString() ?? '';
   const trimmed = text.replace(/\s+/g, ' ').trim();
   return trimmed ? sanitizeText(trimmed).slice(0, MAX_SELECTION_CHARS) : '';
-}
-
-function collectActionable(): ActionableElement[] {
-  const nodes = Array.from(document.querySelectorAll<HTMLElement>(INTERACTIVE_SELECTOR));
-  const withinViewport: ActionableElement[] = [];
-  const offscreen: ActionableElement[] = [];
-
-  for (const el of nodes) {
-    if (isIgnored(el) || !isVisible(el)) continue;
-    if (isSensitiveInput(el)) continue;
-
-    const name = getAccessibleName(el);
-    if (!name) continue;
-
-    const entry: ActionableElement = {
-      name: name.slice(0, 80),
-      role: el.getAttribute('role') || el.tagName.toLowerCase(),
-      hint: el.getAttribute('data-action') || el.getAttribute('name') || el.id || undefined,
-    };
-    // Controls the user can actually see matter more than those far down the page.
-    (isInViewport(el) ? withinViewport : offscreen).push(entry);
-    if (withinViewport.length + offscreen.length >= MAX_ELEMENTS * 3) break;
-  }
-
-  return [...withinViewport, ...offscreen].slice(0, MAX_ELEMENTS);
 }
 
 function buildSummary(actions: ActionableElement[]): string {
@@ -202,7 +252,17 @@ function buildSummary(actions: ActionableElement[]): string {
   }
 
   if (actions.length) {
-    sections.push(`ACTIONS:\n${actions.map((a) => `- [${a.role}] ${a.name}`).join('\n')}`);
+    // Refs are included so the model can target a control precisely.
+    sections.push(
+      `CONTROLS (use ref with page actions):\n${actions
+        .map((a) => {
+          const parts = [`ref=${a.ref}`, `kind=${a.kind}`, `name="${a.name}"`];
+          if (a.value) parts.push(`value="${a.value}"`);
+          if (a.disabled) parts.push('disabled');
+          return `- ${parts.join(' ')}`;
+        })
+        .join('\n')}`,
+    );
   }
 
   const main =
@@ -246,8 +306,7 @@ function extractFields(): Array<{ label: string; value: string }> {
   };
 
   for (const dl of queryVisible('dl')) {
-    const terms = Array.from(dl.querySelectorAll('dt'));
-    for (const dt of terms) {
+    for (const dt of Array.from(dl.querySelectorAll('dt'))) {
       const dd = dt.nextElementSibling;
       if (dd && dd.tagName === 'DD') {
         push(textOf(dt), textOf(dd));
@@ -291,8 +350,7 @@ function extractTables(): string[] {
       const cells = Array.from(row.querySelectorAll('th,td')).map((cell) => textOf(cell) || '-');
       if (cells.length === 0) return;
       rendered.push(`| ${cells.join(' | ')} |`);
-      const isHeaderRow = index === 0 && row.querySelector('th');
-      if (isHeaderRow) {
+      if (index === 0 && row.querySelector('th')) {
         rendered.push(`| ${cells.map(() => '---').join(' | ')} |`);
       }
     });
@@ -328,20 +386,6 @@ function queryVisible(selector: string): HTMLElement[] {
   );
 }
 
-function getAccessibleName(el: HTMLElement): string {
-  const aria = el.getAttribute('aria-label');
-  if (aria?.trim()) return aria.trim();
-
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    const label = el.labels?.[0] ? textOf(el.labels[0]) : '';
-    return (label || el.placeholder || el.name || el.id || '').trim();
-  }
-  if (el instanceof HTMLSelectElement) {
-    return (el.name || el.id || textOf(el)).trim();
-  }
-  return textOf(el).trim();
-}
-
 function isSensitiveInput(el: HTMLElement): boolean {
   if (el instanceof HTMLInputElement && el.type === 'password') return true;
   const name = `${el.getAttribute('name') ?? ''} ${el.id} ${el.getAttribute('autocomplete') ?? ''}`;
@@ -365,16 +409,9 @@ function sanitizeText(text: string): string {
   return out;
 }
 
-function isVisible(el: HTMLElement): boolean {
-  const style = window.getComputedStyle(el);
-  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-    return false;
-  }
-  const rect = el.getBoundingClientRect();
-  return rect.width > 0 && rect.height > 0;
-}
-
 function isInViewport(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
   return rect.top < window.innerHeight && rect.bottom > 0;
 }
+
+export { isSensitiveInput };

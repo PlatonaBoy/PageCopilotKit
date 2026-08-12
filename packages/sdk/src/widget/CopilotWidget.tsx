@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import Markdown from 'react-markdown';
 import type { Translator } from '../i18n';
 import type { CopilotStore } from '../store';
-import type { ChatMessage, CopilotUIOptions } from '../types';
+import type { ChatMessage, CopilotUIOptions, ToolActivity } from '../types';
 
 export interface CopilotWidgetProps {
   ui?: CopilotUIOptions;
@@ -12,9 +12,19 @@ export interface CopilotWidgetProps {
   onStop: () => void;
   onRetry: () => void;
   onClear: () => void;
+  onConfirm: (approved: boolean) => void;
 }
 
-export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }: CopilotWidgetProps) {
+export function CopilotWidget({
+  ui,
+  store,
+  t,
+  onSend,
+  onStop,
+  onRetry,
+  onClear,
+  onConfirm,
+}: CopilotWidgetProps) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const [open, setOpen] = useState(Boolean(ui?.defaultOpen));
   const [draft, setDraft] = useState('');
@@ -24,10 +34,11 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
   const panelRef = useRef<HTMLDivElement>(null);
   const launcherRef = useRef<HTMLButtonElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const approveRef = useRef<HTMLButtonElement>(null);
   const pinnedToBottom = useRef(true);
 
   const title = ui?.title || t('title');
-  const { messages, streaming, restoring, retryable } = state;
+  const { messages, activities, pending, streaming, restoring, retryable } = state;
 
   // Only autoscroll while the user is already at the bottom, so reading history is not hijacked.
   useEffect(() => {
@@ -35,13 +46,21 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
     if (el && pinnedToBottom.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, streaming, open]);
+  }, [messages, activities, pending, streaming, open]);
 
   useEffect(() => {
     if (open) {
       textareaRef.current?.focus();
     }
   }, [open]);
+
+  // A confirmation must be impossible to miss: open the panel and focus the approve button.
+  useEffect(() => {
+    if (pending) {
+      setOpen(true);
+      approveRef.current?.focus();
+    }
+  }, [pending]);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -64,8 +83,8 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
       if (!focusables || focusables.length === 0) return;
       const first = focusables[0]!;
       const last = focusables[focusables.length - 1]!;
-      const active = panelRef.current?.getRootNode() as ShadowRoot | Document;
-      const current = (active as ShadowRoot).activeElement;
+      const root = panelRef.current?.getRootNode() as ShadowRoot;
+      const current = root?.activeElement;
       if (!event.shiftKey && current === last) {
         event.preventDefault();
         first.focus();
@@ -79,11 +98,14 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
     return () => root?.removeEventListener('keydown', onKeyDown);
   }, [open, close]);
 
-  const canSend = useMemo(() => draft.trim().length > 0 && !streaming, [draft, streaming]);
+  const canSend = useMemo(
+    () => draft.trim().length > 0 && !streaming && !pending,
+    [draft, streaming, pending],
+  );
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || streaming) return;
+    if (!text || streaming || pending) return;
     setDraft('');
     pinnedToBottom.current = true;
     onSend(text);
@@ -128,6 +150,7 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
         aria-modal="true"
         aria-label={title}
         data-streaming={streaming ? 'true' : 'false'}
+        data-pending={pending ? 'true' : 'false'}
       >
         <div className="header">
           {ui?.logoUrl ? <img src={ui.logoUrl} alt="" /> : null}
@@ -143,7 +166,12 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
           >
             {t('clear')}
           </button>
-          <button type="button" className="icon-button close" aria-label={t('closeLabel')} onClick={close}>
+          <button
+            type="button"
+            className="icon-button close"
+            aria-label={t('closeLabel')}
+            onClick={close}
+          >
             ×
           </button>
         </div>
@@ -158,7 +186,7 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
         >
           {restoring ? <div className="empty">{t('restoring')}</div> : null}
 
-          {!restoring && messages.length === 0 ? (
+          {!restoring && messages.length === 0 && activities.length === 0 ? (
             <div className="empty">{t('emptyState')}</div>
           ) : (
             messages.map((m) => (
@@ -195,9 +223,37 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
             ))
           )}
 
+          {activities.map((activity) => (
+            <ActivityRow key={activity.id} activity={activity} t={t} />
+          ))}
+
+          {pending ? (
+            <div className="confirm" role="alertdialog" aria-label={t('confirmTitle')}>
+              <div className="confirm-title">{t('confirmTitle')}</div>
+              <div className="confirm-action">{pending.label}</div>
+              {Object.keys(pending.args).length > 0 ? (
+                <pre className="confirm-args">{JSON.stringify(pending.args, null, 2)}</pre>
+              ) : null}
+              <div className="confirm-hint">{t('confirmHint')}</div>
+              <div className="confirm-buttons">
+                <button
+                  type="button"
+                  ref={approveRef}
+                  className="approve"
+                  onClick={() => onConfirm(true)}
+                >
+                  {t('approve')}
+                </button>
+                <button type="button" className="decline" onClick={() => onConfirm(false)}>
+                  {t('decline')}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {/* Streaming text is announced politely rather than character by character. */}
           <div className="sr-only" aria-live="polite" aria-atomic="false">
-            {streaming ? t('thinking') : ''}
+            {pending ? t('confirmTitle') : streaming ? t('thinking') : ''}
           </div>
         </div>
 
@@ -207,6 +263,7 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
             rows={2}
             placeholder={t('placeholder')}
             value={draft}
+            disabled={Boolean(pending)}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -227,5 +284,22 @@ export function CopilotWidget({ ui, store, t, onSend, onStop, onRetry, onClear }
         </div>
       </div>
     </>
+  );
+}
+
+function ActivityRow({ activity, t }: { activity: ToolActivity; t: Translator }) {
+  const status =
+    activity.outcome === 'done'
+      ? t('toolDone')
+      : activity.outcome === 'rejected'
+        ? t('toolRejected')
+        : t('toolFailed');
+
+  return (
+    <div className={`activity ${activity.outcome}`} role="status">
+      <span className="activity-status">{status}</span>
+      <span className="activity-label">{activity.label}</span>
+      {activity.detail ? <span className="activity-detail">{activity.detail}</span> : null}
+    </div>
   );
 }

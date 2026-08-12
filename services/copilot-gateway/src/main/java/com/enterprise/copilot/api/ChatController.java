@@ -3,6 +3,7 @@ package com.enterprise.copilot.api;
 import com.enterprise.copilot.api.dto.ChatDtos.ChatRequest;
 import com.enterprise.copilot.api.dto.ChatDtos.ThreadMessage;
 import com.enterprise.copilot.api.dto.ChatDtos.ThreadMessagesResponse;
+import com.enterprise.copilot.api.dto.ChatDtos.ToolResultRequest;
 import com.enterprise.copilot.auth.AuthSupport;
 import com.enterprise.copilot.auth.UserPrincipal;
 import com.enterprise.copilot.chat.ChatService;
@@ -34,10 +35,26 @@ public class ChatController {
     this.threadService = threadService;
   }
 
-  @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  /** Charset is declared explicitly so intermediaries never guess at non-ASCII answers. */
+  private static final String SSE_UTF8 = MediaType.TEXT_EVENT_STREAM_VALUE + ";charset=UTF-8";
+
+  @PostMapping(value = "/chat", produces = SSE_UTF8)
   public SseEmitter chat(@Valid @RequestBody ChatRequest body, HttpServletRequest request) {
     UserPrincipal user = AuthSupport.requireUser(request);
     return chatService.streamChat(user, body);
+  }
+
+  /**
+   * Reports the outcome of a tool the browser executed. The response is the SSE continuation of the
+   * same turn, so the protocol stays stateless across a user confirmation.
+   */
+  @PostMapping(value = "/chat/{threadId}/tool-result", produces = SSE_UTF8)
+  public SseEmitter toolResult(
+      @PathVariable String threadId,
+      @Valid @RequestBody ToolResultRequest body,
+      HttpServletRequest request) {
+    UserPrincipal user = AuthSupport.requireUser(request);
+    return chatService.streamToolResult(user, threadId, body);
   }
 
   @GetMapping("/threads/{threadId}/messages")

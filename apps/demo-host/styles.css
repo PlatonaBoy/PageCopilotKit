@@ -131,17 +131,47 @@ button.secondary {
   color: var(--accent);
 }
 
+.form,
 .lines,
 .history,
 .internal {
   margin-bottom: 24px;
 }
 
+.form h2,
 .lines h2,
 .internal h2,
 .history h2 {
   font-size: 18px;
   margin: 0 0 12px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 12px 16px;
+  align-items: center;
+}
+
+.form-grid label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.form-grid input,
+.form-grid select,
+.form-grid textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+}
+
+.form-grid textarea {
+  resize: vertical;
 }
 
 .lines table {

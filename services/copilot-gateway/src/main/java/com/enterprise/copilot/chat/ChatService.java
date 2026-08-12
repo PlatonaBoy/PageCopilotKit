@@ -2,14 +2,17 @@ package com.enterprise.copilot.chat;
 
 import com.enterprise.copilot.api.ApiException;
 import com.enterprise.copilot.api.dto.ChatDtos.ChatRequest;
+import com.enterprise.copilot.api.dto.ChatDtos.ClientTool;
+import com.enterprise.copilot.api.dto.ChatDtos.ToolResultRequest;
 import com.enterprise.copilot.audit.AuditRecord;
 import com.enterprise.copilot.audit.AuditService;
 import com.enterprise.copilot.auth.UserPrincipal;
 import com.enterprise.copilot.chat.PromptBuilder.BuiltPrompt;
 import com.enterprise.copilot.config.CopilotProperties;
 import com.enterprise.copilot.ratelimit.RateLimiter;
+import com.enterprise.copilot.tools.ToolPolicy;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -26,8 +29,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class ChatService {
 
   private static final Logger log = LoggerFactory.getLogger(ChatService.class);
-  private static final String DEGRADED_MESSAGE =
-      "AI 服务暂时不可用，请稍后重试。（已记录本次失败）";
+  private static final String DEGRADED_MESSAGE = "AI 服务暂时不可用，请稍后重试。（已记录本次失败）";
 
   private final CopilotProperties properties;
   private final PromptBuilder promptBuilder;
@@ -36,6 +38,8 @@ public class ChatService {
   private final MockAnswerService mockAnswerService;
   private final AuditService auditService;
   private final RateLimiter rateLimiter;
+  private final ToolPolicy toolPolicy;
+  private final ObjectMapper objectMapper;
 
   public ChatService(
       CopilotProperties properties,
@@ -44,7 +48,9 @@ public class ChatService {
       ModelClient modelClient,
       MockAnswerService mockAnswerService,
       AuditService auditService,
-      RateLimiter rateLimiter) {
+      RateLimiter rateLimiter,
+      ToolPolicy toolPolicy,
+      ObjectMapper objectMapper) {
     this.properties = properties;
     this.promptBuilder = promptBuilder;
     this.threadService = threadService;
@@ -52,9 +58,83 @@ public class ChatService {
     this.mockAnswerService = mockAnswerService;
     this.auditService = auditService;
     this.rateLimiter = rateLimiter;
+    this.toolPolicy = toolPolicy;
+    this.objectMapper = objectMapper;
   }
 
   public SseEmitter streamChat(UserPrincipal user, ChatRequest request) {
+    enforceRateLimit(user);
+
+    // Validation and thread resolution happen synchronously so contract errors surface as
+    // real HTTP status codes instead of an SSE error inside a 200 response.
+    ChatThread thread = threadService.resolveOrCreate(user, request.threadId(), request.appId());
+    List<ChatTurn> history = threadService.loadHistoryForPrompt(thread.getThreadId());
+    BuiltPrompt prompt = promptBuilder.build(user, request, history);
+    List<ClientTool> tools = toolPolicy.permitted(user, request.appId(), request.clientTools());
+
+    threadService.appendUserTurn(thread, request.message());
+
+    return run(
+        user,
+        thread,
+        request.appId(),
+        request.message(),
+        prompt,
+        tools,
+        () -> mockAnswerService.plan(
+            request.message(),
+            request.pageContext(),
+            request.businessContext(),
+            tools,
+            history));
+  }
+
+  /**
+   * Continues a turn after the browser executed a tool.
+   *
+   * <p>The tool outcome and a fresh page observation are folded into history, then the model decides
+   * whether to answer or act again. Each continuation is its own SSE response, which keeps the
+   * protocol stateless and avoids holding a stream open across a user confirmation.
+   */
+  public SseEmitter streamToolResult(
+      UserPrincipal user, String threadId, ToolResultRequest request) {
+    enforceRateLimit(user);
+
+    ChatThread thread = threadService.requireOwned(user, threadId);
+    List<ClientTool> tools = toolPolicy.permitted(user, request.appId(), request.clientTools());
+
+    int steps = threadService.countToolCallsInCurrentTurn(threadId);
+    if (steps > properties.getTools().getMaxStepsPerTurn()) {
+      throw new ApiException(
+          HttpStatus.CONFLICT, "tool_step_limit", "Too many tool steps for one turn");
+    }
+
+    String outcome =
+        mockAnswerService.describeToolOutcome(request.name(), request.result(), request.error());
+    threadService.appendToolResultTurn(thread, request.name(), outcome);
+
+    List<ChatTurn> history = threadService.loadHistoryForPrompt(threadId);
+    BuiltPrompt prompt =
+        promptBuilder.buildContinuation(
+            user,
+            request.appId(),
+            request.pageContext(),
+            request.businessContext(),
+            history,
+            outcome);
+
+    return run(
+        user,
+        thread,
+        request.appId(),
+        "[tool-result] " + request.name(),
+        prompt,
+        tools,
+        // Offline continuation just reports the outcome; it never chains further actions on its own.
+        () -> new MockAnswerService.MockPlan(null, outcome + "（离线模式）"));
+  }
+
+  private void enforceRateLimit(UserPrincipal user) {
     RateLimiter.Decision decision = rateLimiter.check(user.tenantId(), user.sub());
     if (!decision.allowed()) {
       throw new ApiException(
@@ -68,12 +148,16 @@ public class ChatService {
               + decision.retryAfterSeconds()
               + "s");
     }
+  }
 
-    // Validation and thread resolution happen synchronously so contract errors surface as
-    // real HTTP status codes instead of an SSE error inside a 200 response.
-    ChatThread thread = threadService.resolveOrCreate(user, request.threadId(), request.appId());
-    List<ChatTurn> history = threadService.loadHistoryForPrompt(thread.getThreadId());
-    BuiltPrompt prompt = promptBuilder.build(user, request, history);
+  private SseEmitter run(
+      UserPrincipal user,
+      ChatThread thread,
+      String appId,
+      String question,
+      BuiltPrompt prompt,
+      List<ClientTool> tools,
+      java.util.function.Supplier<MockAnswerService.MockPlan> mockPlanner) {
 
     String traceId = "trc_" + UUID.randomUUID().toString().replace("-", "");
     SseEmitter emitter = new SseEmitter(properties.getLlm().getTimeout().plusSeconds(30).toMillis());
@@ -83,7 +167,6 @@ public class ChatService {
     emitter.onCompletion(() -> clientGone.set(true));
 
     long started = System.currentTimeMillis();
-    threadService.appendUserTurn(thread, request.message());
 
     Thread.startVirtualThread(
         () -> {
@@ -94,31 +177,45 @@ public class ChatService {
           try {
             emit(emitter, "thread", Map.of("threadId", thread.getThreadId()));
 
+            ModelClient.ToolInvocation toolCall;
             if (modelClient.isMockMode()) {
-              streamMock(emitter, request, history, full, clientGone);
+              MockAnswerService.MockPlan plan = mockPlanner.get();
+              toolCall = plan.toolCall();
+              if (toolCall == null) {
+                streamMock(emitter, plan.text(), full, clientGone);
+              }
             } else {
-              modelClient.stream(
-                  prompt,
-                  chunk -> {
-                    if (clientGone.get()) {
-                      throw new ClientDisconnectedException();
-                    }
-                    full.append(chunk);
-                    emitQuietly(emitter, "text.delta", Map.of("delta", chunk));
-                  });
+              ModelClient.Completion completion =
+                  modelClient.complete(
+                      prompt,
+                      tools,
+                      chunk -> {
+                        if (clientGone.get()) {
+                          throw new ClientDisconnectedException();
+                        }
+                        full.append(chunk);
+                        emitQuietly(emitter, "text.delta", Map.of("delta", chunk));
+                      });
+              toolCall = completion.toolCall();
             }
 
-            String answer = full.toString();
-            emit(emitter, "text.done", Map.of("content", answer));
+            if (toolCall != null) {
+              dispatchToolCall(emitter, user, thread, appId, tools, toolCall, full);
+            } else {
+              String answer = full.toString();
+              emit(emitter, "text.done", Map.of("content", answer));
+              threadService.appendAssistantTurn(thread, answer);
+            }
+
             emit(emitter, "done", Map.of("traceId", traceId));
-            threadService.appendAssistantTurn(thread, answer);
             audit(
                 user,
-                request,
+                appId,
                 thread,
                 traceId,
+                question,
                 prompt,
-                answer,
+                full.toString(),
                 AuditRecord.Status.SUCCESS,
                 null,
                 started);
@@ -128,9 +225,10 @@ public class ChatService {
             threadService.appendAssistantTurn(thread, full.toString());
             audit(
                 user,
-                request,
+                appId,
                 thread,
                 traceId,
+                question,
                 prompt,
                 full.toString(),
                 AuditRecord.Status.FAILED,
@@ -138,7 +236,8 @@ public class ChatService {
                 started);
             emitter.complete();
           } catch (Exception ex) {
-            handleFailure(emitter, user, request, thread, traceId, prompt, full, ex, started);
+            handleFailure(
+                emitter, user, appId, thread, traceId, question, prompt, full, ex, started);
           } finally {
             MDC.clear();
           }
@@ -147,12 +246,51 @@ public class ChatService {
     return emitter;
   }
 
+  /**
+   * Authorizes and forwards a tool request.
+   *
+   * <p>Authorization is deliberately re-checked here against verified JWT claims: the model naming a
+   * tool is intent, not permission, and a tool the client never advertised is treated as an attack.
+   */
+  private void dispatchToolCall(
+      SseEmitter emitter,
+      UserPrincipal user,
+      ChatThread thread,
+      String appId,
+      List<ClientTool> tools,
+      ModelClient.ToolInvocation call,
+      StringBuilder full)
+      throws IOException {
+    ToolPolicy.Decision decision = toolPolicy.authorize(user, appId, call.name(), tools);
+    if (!decision.allowed()) {
+      String refusal = "无法执行操作「" + call.name() + "」：" + decision.message();
+      emit(emitter, "text.delta", Map.of("delta", refusal));
+      emit(emitter, "text.done", Map.of("content", refusal));
+      emit(emitter, "error", Map.of("code", decision.code(), "message", decision.message()));
+      full.append(refusal);
+      threadService.appendAssistantTurn(thread, refusal);
+      return;
+    }
+
+    threadService.appendToolCallTurn(thread, call.name(), serialize(call.arguments()));
+    if (!full.isEmpty()) {
+      // Any prose the model produced alongside the request is still a completed assistant turn.
+      emit(emitter, "text.done", Map.of("content", full.toString()));
+      threadService.appendAssistantTurn(thread, full.toString());
+    }
+    emit(
+        emitter,
+        "tool.call",
+        Map.of("id", call.id(), "name", call.name(), "arguments", call.arguments()));
+  }
+
   private void handleFailure(
       SseEmitter emitter,
       UserPrincipal user,
-      ChatRequest request,
+      String appId,
       ChatThread thread,
       String traceId,
+      String question,
       BuiltPrompt prompt,
       StringBuilder full,
       Exception ex,
@@ -174,14 +312,25 @@ public class ChatService {
       emitter.completeWithError(ex);
     }
 
-    audit(user, request, thread, traceId, prompt, answer, AuditRecord.Status.FAILED, code, started);
+    audit(
+        user,
+        appId,
+        thread,
+        traceId,
+        question,
+        prompt,
+        answer,
+        AuditRecord.Status.FAILED,
+        code,
+        started);
   }
 
   private void audit(
       UserPrincipal user,
-      ChatRequest request,
+      String appId,
       ChatThread thread,
       String traceId,
+      String question,
       BuiltPrompt prompt,
       String answer,
       AuditRecord.Status status,
@@ -189,10 +338,10 @@ public class ChatService {
       long started) {
     auditService.record(
         user,
-        request.appId(),
+        appId,
         thread.getThreadId(),
         traceId,
-        request.message(),
+        question,
         prompt.contextHash(),
         answer,
         modelClient.modelLabel(),
@@ -202,13 +351,8 @@ public class ChatService {
   }
 
   private void streamMock(
-      SseEmitter emitter,
-      ChatRequest request,
-      List<ChatTurn> history,
-      StringBuilder full,
-      AtomicBoolean clientGone)
+      SseEmitter emitter, String answer, StringBuilder full, AtomicBoolean clientGone)
       throws IOException, InterruptedException {
-    String answer = mockAnswerService.answer(request, history);
     int i = 0;
     while (i < answer.length()) {
       if (clientGone.get()) {
@@ -220,6 +364,14 @@ public class ChatService {
       emit(emitter, "text.delta", Map.of("delta", chunk));
       Thread.sleep(15);
       i = end;
+    }
+  }
+
+  private String serialize(Object value) {
+    try {
+      return objectMapper.writeValueAsString(value);
+    } catch (Exception ex) {
+      return String.valueOf(value);
     }
   }
 

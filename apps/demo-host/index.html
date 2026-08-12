@@ -56,6 +56,24 @@
         <a href="#history" id="link-history">查看历史</a>
       </div>
 
+      <section class="form">
+        <h2>审批意见</h2>
+        <div class="form-grid">
+          <label for="reviewer">审批人</label>
+          <input id="reviewer" name="reviewer" type="text" placeholder="填写审批人姓名" />
+
+          <label for="priority">优先级</label>
+          <select id="priority" name="priority">
+            <option value="normal">普通</option>
+            <option value="high">加急</option>
+            <option value="urgent">特急</option>
+          </select>
+
+          <label for="comment">审批备注</label>
+          <textarea id="comment" name="comment" rows="2" placeholder="填写审批备注"></textarea>
+        </div>
+      </section>
+
       <section class="lines">
         <h2>订单明细</h2>
         <table>

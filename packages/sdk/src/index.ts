@@ -1,5 +1,5 @@
 import { Copilot } from './Copilot';
-import type { CopilotInit } from './types';
+import type { CopilotInit, CopilotTool } from './types';
 
 export type {
   ActionableElement,
@@ -10,14 +10,21 @@ export type {
   CopilotLocale,
   CopilotPosition,
   CopilotState,
+  CopilotTool,
   CopilotUIOptions,
+  JsonSchema,
+  PageActionOptions,
   PageContextSnapshot,
+  PendingToolCall,
+  ToolActivity,
+  ToolRisk,
 } from './types';
 
 export { Copilot };
 export { CopilotError } from './transport/errors';
 export { PageEngine } from './page/PageEngine';
 export { ContextEngine } from './context/ContextEngine';
+export { ToolRegistry } from './tools/ToolRegistry';
 
 const api = {
   /** Mounts the copilot. Calling it again replaces the previous instance. */
@@ -26,6 +33,17 @@ const api = {
   },
   getInstance() {
     return Copilot.getInstance();
+  },
+  /** Registers a business capability after init. */
+  registerTool(tool: CopilotTool) {
+    const instance = Copilot.getInstance();
+    if (!instance) {
+      throw new Error('[EnterpriseCopilot] call Copilot.init() before registerTool()');
+    }
+    instance.registerTool(tool);
+  },
+  unregisterTool(name: string) {
+    Copilot.getInstance()?.unregisterTool(name);
   },
   stop() {
     Copilot.getInstance()?.stop();

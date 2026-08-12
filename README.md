@@ -19,6 +19,7 @@
 | 文档 | 内容 |
 |------|------|
 | [docs/architecture.md](docs/architecture.md) | 分层架构、上下文模型、威胁模型 |
+| [docs/actions.md](docs/actions.md) | **页面操作与工具调用**：接入、risk 分级、安全模型 |
 | [docs/api.md](docs/api.md) | 接口契约（SSE 事件、错误码、JWT 声明） |
 | [docs/operations.md](docs/operations.md) | 部署、配置、上线检查清单 |
 | [docs/design-v1-hardening.md](docs/design-v1-hardening.md) | V1 加固设计与取舍依据 |
@@ -37,8 +38,11 @@
 | 敏感信息脱敏、`data-copilot-ignore` 忽略区域 | 已支持 |
 | JWT 鉴权、租户隔离、限流、审计（成功与失败） | 已支持 |
 | 模型超时/重试/熔断与降级 | 已支持 |
-| 页面自动操作（点击/填表）、Tool Calling | 二期 |
-| 企业知识库 / RAG / 引用来源 | 三期 |
+| **业务工具调用**（`registerTool`，服务端权限校验） | 已支持 |
+| **页面操作**（点击/填表/下拉/读取，元素执行前重校验） | 已支持 |
+| **risk 分级确认**（`read` 直接执行，`write` 需人工确认） | 已支持 |
+| 企业知识库 / RAG / 引用来源 | 后续 |
+| 跨页 / 跨 iframe / 深层 Shadow DOM 感知 | 后续 |
 
 ## 快速开始（本地）
 
@@ -76,9 +80,18 @@ npm run dev --prefix apps/demo-host
 
 打开 `http://localhost:5173`，点右下角 **AI**，试试：
 
+**问答**
+
 - 「这个订单金额是多少」
 - 「客户是谁」（验证多轮上下文）
 - 「当前页面有哪些按钮」
+
+**操作**（详见 [docs/actions.md](docs/actions.md)）
+
+- 「帮我审批这个订单」→ 弹出确认卡片，确认后页面状态变为「审批中」
+- 「帮我填写审批人为张三」→ 直接填入（demo 中 `page_fill` 已配置免确认）
+- 「把优先级改成加急」→ 直接选中下拉项
+- 「帮我导出 Excel」→ 业务写操作，始终需要确认
 
 > SDK 产物是 git-ignored 的，改动 SDK 源码后需重新执行 `npm run build:sdk`（demo 通过 `<script src>` 加载构建产物，不会热更新）。
 
@@ -100,9 +113,9 @@ npm run test:e2e        # 浏览器端到端（需先起 gateway 与 demo）
 
 | 套件 | 覆盖 |
 |------|------|
-| SDK 单测（Vitest，44 项） | SSE 解析边界、上下文预算、页面提取与脱敏、状态批处理、Widget 交互与 a11y、i18n |
-| Gateway 测试（JUnit，24 项） | Prompt 组装与预算、Mock 检索、鉴权矩阵、多轮持久化、租户隔离、CORS、限额 |
-| E2E（Playwright，9 项） | 嵌入加载、业务字段问答、多轮上下文、刷新恢复、清空、错误重试、忽略区域、Escape |
+| SDK 单测（Vitest，73 项） | SSE 解析边界、上下文预算、页面提取与脱敏、状态批处理、Widget 与确认卡片、工具注册与 risk 判定、页面动作与元素失效、i18n |
+| Gateway 测试（JUnit，56 项） | Prompt 组装与预算、Mock 规划器、鉴权矩阵、多轮持久化、租户隔离、CORS、限额、工具白名单与权限、tool-result 续流 |
+| E2E（Playwright，18 项） | 嵌入加载、多轮上下文、刷新恢复、清空、错误重试、忽略区域、确认/拒绝、页面填表与下拉、权限拒绝 |
 
 若机器已装 Chrome，可用 `CHROME_PATH=/usr/bin/google-chrome npm run test:e2e` 复用它，省去浏览器下载。
 
@@ -120,6 +133,8 @@ docs/                      架构、接口、运维、设计
 
 - **模型 API Key 永不进入浏览器**：所有模型流量经 Gateway。
 - **身份来自 JWT**，不接受前端声明的 `userId`；`tenantId` 贯穿会话、审计与限流。
-- **页面 DOM 文本视为不可信输入**，与系统指令隔离，防提示注入。
+- **页面 DOM 文本视为不可信输入**，与系统指令隔离；**页面内容永远不能触发操作**。
 - **会话按 (tenantId, userSub) 隔离**，访问他人会话返回 404。
-- 生产部署前请对照 [docs/operations.md](docs/operations.md) 的上线清单。
+- **工具调用需服务端授权**：前端声明不等于授权，按 `appId` 白名单 + JWT 权限双重校验。
+- **写操作需人工确认**，且确认卡片展示实际参数；已执行写操作的轮次禁止自动重放。
+- 生产部署前请对照 [docs/operations.md](docs/operations.md) 与 [docs/actions.md](docs/actions.md) 的上线清单。

@@ -17,6 +17,7 @@ export interface MountOptions {
   onStop: () => void;
   onRetry: () => void;
   onClear: () => void;
+  onConfirm: (approved: boolean) => void;
 }
 
 const HOST_ID = 'enterprise-copilot-root';
@@ -49,6 +50,7 @@ export function mountWidget(options: MountOptions): MountHandle {
       onStop={options.onStop}
       onRetry={options.onRetry}
       onClear={options.onClear}
+      onConfirm={options.onConfirm}
     />,
   );
 

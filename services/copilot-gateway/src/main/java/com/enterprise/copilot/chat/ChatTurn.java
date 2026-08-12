@@ -19,7 +19,11 @@ public class ChatTurn {
 
   public enum Role {
     USER,
-    ASSISTANT
+    ASSISTANT,
+    /** The assistant requested a tool; content holds the name and arguments. */
+    TOOL_CALL,
+    /** The browser reported the outcome; content holds the result or error. */
+    TOOL_RESULT
   }
 
   @Id

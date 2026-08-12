@@ -1,4 +1,5 @@
-import type { PageContextSnapshot, StreamHandlers } from '../types';
+import type { PageContextSnapshot, StreamHandlers, ToolCallRequest } from '../types';
+import type { ToolSchema } from '../tools/ToolRegistry';
 import { CopilotError, fromStatus, isAbort } from './errors';
 
 export interface ChatRequestBody {
@@ -7,12 +8,30 @@ export interface ChatRequestBody {
   message: string;
   pageContext: PageContextSnapshot;
   businessContext: Record<string, unknown>;
+  clientTools?: ToolSchema[];
 }
 
-export interface StreamChatOptions {
+export interface ToolResultBody {
+  appId: string;
+  toolCallId: string;
+  name: string;
+  result?: unknown;
+  error?: string;
+  /** Fresh snapshot: a page action may have changed the DOM. */
+  pageContext: PageContextSnapshot;
+  businessContext: Record<string, unknown>;
+  clientTools?: ToolSchema[];
+}
+
+export interface TurnOutcome {
+  content: string;
+  toolCall?: ToolCallRequest;
+  traceId?: string;
+}
+
+export interface StreamOptions {
   gatewayUrl: string;
   token: string;
-  body: ChatRequestBody;
   handlers: StreamHandlers;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -20,15 +39,36 @@ export interface StreamChatOptions {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+export async function streamChat(
+  options: StreamOptions & { body: ChatRequestBody },
+): Promise<TurnOutcome> {
+  return request(options, '/v1/chat', options.body);
+}
+
+/** Posts a tool result; the response is the SSE continuation of the same turn. */
+export async function streamToolResult(
+  options: StreamOptions & { threadId: string; body: ToolResultBody },
+): Promise<TurnOutcome> {
+  return request(
+    options,
+    `/v1/chat/${encodeURIComponent(options.threadId)}/tool-result`,
+    options.body,
+  );
+}
+
 /**
- * Streams one chat turn.
+ * Sends one request and consumes its SSE response.
  *
  * The gateway ends a turn with a `done` event but Spring may keep the TCP stream open, so `done`
  * is treated as end-of-turn rather than waiting for the reader to close. A separate idle timeout
  * guards against a gateway that stops sending entirely.
  */
-export async function streamChat(options: StreamChatOptions): Promise<void> {
-  const url = joinUrl(options.gatewayUrl, '/v1/chat');
+async function request(
+  options: StreamOptions,
+  path: string,
+  body: unknown,
+): Promise<TurnOutcome> {
+  const url = joinUrl(options.gatewayUrl, path);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   const controller = new AbortController();
@@ -44,6 +84,10 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
       controller.abort();
     }, timeoutMs);
   };
+  const cleanup = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    options.signal?.removeEventListener('abort', abortFromCaller);
+  };
 
   let response: Response;
   resetIdleTimer();
@@ -53,19 +97,17 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
       headers: {
         Authorization: `Bearer ${options.token}`,
         'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
+        // JSON is listed too: contract errors (400/413/429) come back as a JSON envelope, and an
+        // Accept of only text/event-stream would leave the server unable to represent them.
+        Accept: 'text/event-stream, application/json',
       },
-      body: JSON.stringify(options.body),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
   } catch (err) {
     cleanup();
-    if (timedOut) {
-      throw new CopilotError('timeout', 'Request timed out', { retryable: true });
-    }
-    if (isAbort(err)) {
-      throw err;
-    }
+    if (timedOut) throw new CopilotError('timeout', 'Request timed out', { retryable: true });
+    if (isAbort(err)) throw err;
     throw new CopilotError('network', 'Network request failed', { retryable: true });
   }
 
@@ -84,6 +126,7 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
   let buffer = '';
   let assembled = '';
   let traceId: string | undefined;
+  let toolCall: ToolCallRequest | undefined;
   let streamError: { code: string; message: string } | undefined;
   let finished = false;
 
@@ -107,6 +150,18 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
         assembled = String((parsed.data as { content?: string }).content || assembled);
         break;
       }
+      case 'tool.call': {
+        const data = parsed.data as { id?: string; name?: string; arguments?: unknown };
+        if (data.name) {
+          toolCall = {
+            id: String(data.id || ''),
+            name: String(data.name),
+            arguments: coerceArgs(data.arguments),
+          };
+          options.handlers.onToolCall?.(toolCall);
+        }
+        break;
+      }
       case 'error': {
         const data = parsed.data as { code?: string; message?: string };
         streamError = { code: data.code || 'model_error', message: data.message || 'error' };
@@ -114,6 +169,7 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
       }
       case 'done': {
         traceId = (parsed.data as { traceId?: string }).traceId;
+        // Spring may keep the connection open after complete(); `done` is authoritative.
         finished = true;
         break;
       }
@@ -149,12 +205,8 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
       consume(decoder.decode(value, { stream: true }), false);
     }
   } catch (err) {
-    if (timedOut) {
-      throw new CopilotError('timeout', 'Stream timed out', { retryable: true });
-    }
-    if (isAbort(err)) {
-      throw err;
-    }
+    if (timedOut) throw new CopilotError('timeout', 'Stream timed out', { retryable: true });
+    if (isAbort(err)) throw err;
     throw new CopilotError('network', 'Stream interrupted', { retryable: true });
   } finally {
     cleanup();
@@ -163,17 +215,31 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
 
   if (streamError) {
     options.handlers.onError?.(streamError.code, streamError.message);
-    throw new CopilotError(streamError.code, streamError.message, {
-      retryable: true,
-    });
+    throw new CopilotError(streamError.code, streamError.message, { retryable: true });
   }
 
-  options.handlers.onDone?.(assembled, traceId);
-
-  function cleanup() {
-    if (idleTimer) clearTimeout(idleTimer);
-    options.signal?.removeEventListener('abort', abortFromCaller);
+  if (!toolCall) {
+    options.handlers.onDone?.(assembled, traceId);
   }
+  return { content: assembled, toolCall, traceId };
+}
+
+/** Models sometimes emit arguments as a JSON string rather than an object. */
+function coerceArgs(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return {};
 }
 
 export async function fetchThreadMessages(
@@ -181,9 +247,10 @@ export async function fetchThreadMessages(
   token: string,
   threadId: string,
 ): Promise<Array<{ role: string; content: string }>> {
-  const res = await fetch(joinUrl(gatewayUrl, `/v1/threads/${encodeURIComponent(threadId)}/messages`), {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-  });
+  const res = await fetch(
+    joinUrl(gatewayUrl, `/v1/threads/${encodeURIComponent(threadId)}/messages`),
+    { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+  );
   if (!res.ok) {
     throw fromStatus(res.status, await res.text().catch(() => ''));
   }

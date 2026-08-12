@@ -1,4 +1,10 @@
-import type { ChatMessage, ChatMessageStatus, CopilotState } from './types';
+import type {
+  ChatMessage,
+  ChatMessageStatus,
+  CopilotState,
+  PendingToolCall,
+  ToolActivity,
+} from './types';
 
 type Listener = () => void;
 
@@ -11,6 +17,7 @@ type Listener = () => void;
 export class CopilotStore {
   private state: CopilotState = {
     messages: [],
+    activities: [],
     streaming: false,
     restoring: false,
     retryable: false,
@@ -33,63 +40,71 @@ export class CopilotStore {
   getSnapshot = (): CopilotState => this.state;
 
   setMessages(messages: ChatMessage[]): void {
-    this.state = { ...this.state, messages };
-    this.notifyNow();
+    this.patch({ messages });
   }
 
   appendMessage(message: ChatMessage): void {
-    this.state = { ...this.state, messages: [...this.state.messages, message] };
-    this.notifyNow();
+    this.patch({ messages: [...this.state.messages, message] });
   }
 
-  /** Streaming hot path: appends to the last message without rebuilding the whole list eagerly. */
+  /** Streaming hot path: appends to the last message without notifying per delta. */
   appendDelta(id: string, delta: string): void {
     const messages = this.state.messages;
     const last = messages[messages.length - 1];
     if (!last || last.id !== id) {
       return;
     }
-    const updated: ChatMessage = {
-      ...last,
-      content: last.content + delta,
-      status: 'streaming',
-    };
+    const updated: ChatMessage = { ...last, content: last.content + delta, status: 'streaming' };
     this.state = { ...this.state, messages: [...messages.slice(0, -1), updated] };
     this.notifyBatched();
   }
 
   updateMessage(id: string, patch: Partial<ChatMessage>): void {
-    const messages = this.state.messages.map((m) => (m.id === id ? { ...m, ...patch } : m));
-    this.state = { ...this.state, messages };
-    this.notifyNow();
+    this.patch({ messages: this.state.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
   }
 
   setMessageStatus(id: string, status: ChatMessageStatus, errorCode?: string): void {
     this.updateMessage(id, { status, errorCode });
   }
 
+  /** Drops a message that turned out to carry nothing (e.g. the model only called a tool). */
+  removeMessage(id: string): void {
+    this.patch({ messages: this.state.messages.filter((m) => m.id !== id) });
+  }
+
+  addActivity(activity: ToolActivity): void {
+    this.patch({ activities: [...this.state.activities, activity] });
+  }
+
+  setPending(pending: PendingToolCall | undefined): void {
+    this.patch({ pending });
+  }
+
   setStreaming(streaming: boolean): void {
-    this.state = { ...this.state, streaming };
-    this.notifyNow();
+    this.patch({ streaming });
   }
 
   setRestoring(restoring: boolean): void {
-    this.state = { ...this.state, restoring };
-    this.notifyNow();
+    this.patch({ restoring });
   }
 
   setThreadId(threadId: string | undefined): void {
-    this.state = { ...this.state, threadId };
-    this.notifyNow();
+    this.patch({ threadId });
   }
 
   setRetryable(retryable: boolean): void {
-    this.state = { ...this.state, retryable };
-    this.notifyNow();
+    this.patch({ retryable });
   }
 
   reset(): void {
-    this.state = { messages: [], streaming: false, restoring: false, retryable: false };
+    this.state = {
+      messages: [],
+      activities: [],
+      pending: undefined,
+      streaming: false,
+      restoring: false,
+      retryable: false,
+    };
     this.notifyNow();
   }
 
@@ -108,6 +123,11 @@ export class CopilotStore {
   dispose(): void {
     this.flush();
     this.listeners.clear();
+  }
+
+  private patch(partial: Partial<CopilotState>): void {
+    this.state = { ...this.state, ...partial };
+    this.notifyNow();
   }
 
   private notifyNow(): void {

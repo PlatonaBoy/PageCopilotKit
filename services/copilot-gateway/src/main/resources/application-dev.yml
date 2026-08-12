@@ -15,6 +15,20 @@ copilot:
   cors-allow-all-patterns: true
   llm:
     mock: ${COPILOT_MOCK_LLM:true}
+  tools:
+    enabled: true
+    # Mirrors a realistic production policy so the demo exercises both gates.
+    allowed:
+      crm:
+        - approveOrder
+        - exportOrder
+        - page_click
+        - page_fill
+        - page_select
+        - page_read
+        - page_scroll
+    required-permission:
+      approveOrder: order:approve
 
 logging:
   level:

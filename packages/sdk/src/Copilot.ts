@@ -2,12 +2,21 @@ import { ContextEngine } from './context/ContextEngine';
 import { createTranslator, errorMessageKey, type Translator } from './i18n';
 import { PageEngine } from './page/PageEngine';
 import { CopilotStore } from './store';
+import { ToolRegistry } from './tools/ToolRegistry';
+import { createPageActionTools } from './tools/pageActions';
 import { CopilotError, isAbort } from './transport/errors';
-import { deleteThread, fetchThreadMessages, streamChat } from './transport/sseClient';
-import type { ChatMessage, CopilotInit } from './types';
+import {
+  deleteThread,
+  fetchThreadMessages,
+  streamChat,
+  streamToolResult,
+  type TurnOutcome,
+} from './transport/sseClient';
+import type { ChatMessage, CopilotInit, CopilotTool, ToolCallRequest } from './types';
 import { mountWidget, type MountHandle } from './widget/mount';
 
 const THREAD_STORAGE_PREFIX = 'enterprise-copilot:thread:';
+const DEFAULT_MAX_TOOL_STEPS = 5;
 
 let singleton: Copilot | null = null;
 
@@ -16,6 +25,7 @@ export class Copilot {
   private readonly page = new PageEngine();
   private readonly context: ContextEngine;
   private readonly store = new CopilotStore();
+  private readonly tools = new ToolRegistry();
   private readonly t: Translator;
 
   private mount: MountHandle | null = null;
@@ -23,11 +33,17 @@ export class Copilot {
   private threadId: string | undefined;
   private lastQuestion: string | undefined;
   private destroyed = false;
+  /** Resolver for the confirmation card currently shown, if any. */
+  private confirmResolver: ((approved: boolean) => void) | null = null;
+  /** A turn that already performed a write must never be replayed automatically. */
+  private turnDidWrite = false;
 
   private constructor(init: CopilotInit) {
     this.init = init;
     this.context = new ContextEngine(init);
     this.t = createTranslator(init.ui?.locale);
+    this.tools.registerAll(init.tools);
+    this.tools.registerAll(createPageActionTools(this.page, init.pageActions));
   }
 
   static init(options: CopilotInit): Copilot {
@@ -45,11 +61,22 @@ export class Copilot {
     return singleton;
   }
 
+  /** Registers a business capability after init. Replaces a tool with the same name. */
+  registerTool(tool: CopilotTool): void {
+    this.tools.register(tool);
+  }
+
+  unregisterTool(name: string): void {
+    this.tools.unregister(name);
+  }
+
   /** Aborts the in-flight turn, keeping whatever was already streamed. */
   stop(): void {
     if (!this.store.getSnapshot().streaming) {
       return;
     }
+    // A pending confirmation is treated as declined so the turn can unwind.
+    this.resolveConfirmation(false);
     this.abort?.abort();
   }
 
@@ -59,7 +86,6 @@ export class Copilot {
     this.threadId = undefined;
     this.lastQuestion = undefined;
     this.store.reset();
-    this.store.setThreadId(undefined);
     this.forgetStoredThread();
 
     if (threadId) {
@@ -88,16 +114,27 @@ export class Copilot {
     void this.send(question, { replay: true });
   }
 
+  /** Called by the confirmation card. */
+  resolveConfirmation(approved: boolean): void {
+    const resolver = this.confirmResolver;
+    if (!resolver) return;
+    this.confirmResolver = null;
+    this.store.setPending(undefined);
+    resolver(approved);
+  }
+
   async refreshPageContext() {
     return this.page.snapshot();
   }
 
   destroy(): void {
     this.destroyed = true;
+    this.resolveConfirmation(false);
     this.abort?.abort();
     this.page.stop();
     this.mount?.destroy();
     this.mount = null;
+    this.tools.clear();
     this.store.dispose();
     if (singleton === this) {
       singleton = null;
@@ -121,6 +158,7 @@ export class Copilot {
       onClear: () => {
         void this.clear();
       },
+      onConfirm: (approved) => this.resolveConfirmation(approved),
     });
   }
 
@@ -164,107 +202,295 @@ export class Copilot {
       return;
     }
     this.lastQuestion = text;
+    this.turnDidWrite = false;
     this.store.setRetryable(false);
 
     if (!options.replay) {
-      this.store.appendMessage({
-        id: id(),
-        role: 'user',
-        content: text,
-        status: 'done',
-      });
+      this.store.appendMessage({ id: id(), role: 'user', content: text, status: 'done' });
     }
 
-    const assistant: ChatMessage = {
-      id: id(),
-      role: 'assistant',
-      content: '',
-      status: 'pending',
-    };
-    this.store.appendMessage(assistant);
     this.store.setStreaming(true);
-
     this.abort = new AbortController();
 
+    let assistantId: string | undefined;
     try {
-      await this.runTurn(text, assistant.id, false);
+      assistantId = await this.runTurnLoop(text);
     } catch (err) {
-      this.handleTurnFailure(err, assistant.id);
+      this.handleTurnFailure(err, assistantId);
     } finally {
       this.store.flush();
       this.store.setStreaming(false);
+      this.store.setPending(undefined);
+      this.confirmResolver = null;
       this.abort = null;
     }
   }
 
   /**
-   * One request attempt. On 401 the token is re-fetched once and the turn replayed, which covers
-   * the common case of a JWT expiring while the panel was open.
+   * Drives one user turn to completion.
+   *
+   * The model may answer directly or request a tool. Each tool result starts a fresh SSE
+   * continuation, so the loop runs until the model produces text or the step budget is exhausted.
    */
-  private async runTurn(text: string, assistantId: string, isRetryAfterAuth: boolean): Promise<void> {
+  private async runTurnLoop(text: string): Promise<string> {
+    const maxSteps = this.init.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS;
+    let assistantId = this.beginAssistantMessage();
+    let outcome = await this.requestTurn(text, assistantId, false);
+
+    for (let step = 0; outcome.toolCall; step += 1) {
+      if (step >= maxSteps) {
+        this.store.updateMessage(assistantId, {
+          status: 'error',
+          errorCode: 'tool_step_limit',
+          content: this.t('toolStepLimit'),
+        });
+        this.store.setRetryable(false);
+        return assistantId;
+      }
+
+      const call = outcome.toolCall;
+      // The assistant turn carried no prose, only a tool request; drop the empty bubble.
+      if (!outcome.content) {
+        this.store.removeMessage(assistantId);
+      } else {
+        this.store.setMessageStatus(assistantId, 'done');
+      }
+
+      const settled = await this.runToolCall(call);
+      assistantId = this.beginAssistantMessage();
+      outcome = await this.continueAfterTool(call, settled, assistantId);
+    }
+
+    this.store.setMessageStatus(assistantId, 'done');
+    return assistantId;
+  }
+
+  private beginAssistantMessage(): string {
+    const message: ChatMessage = { id: id(), role: 'assistant', content: '', status: 'pending' };
+    this.store.appendMessage(message);
+    return message.id;
+  }
+
+  /**
+   * Executes one tool call: validates it, asks the user when the risk requires it, runs it, and
+   * records the outcome in the transcript so every action stays visible.
+   */
+  private async runToolCall(
+    call: ToolCallRequest,
+  ): Promise<{ result?: unknown; error?: string }> {
+    const tool = this.tools.get(call.name);
+    const label = this.describeCall(call);
+
+    if (!tool) {
+      // The model invented a tool, or the gateway allowed one this client does not expose.
+      this.store.addActivity({
+        id: call.id || id(),
+        name: call.name,
+        label,
+        args: call.arguments,
+        outcome: 'failed',
+        detail: this.t('toolUnknown'),
+      });
+      return { error: `unknown tool "${call.name}"` };
+    }
+
+    if (this.tools.needsConfirmation(call.name)) {
+      const approved = await this.askConfirmation(call, label);
+      this.init.onToolCall?.({ name: call.name, args: call.arguments, approved });
+      if (!approved) {
+        // The `rejected` outcome already renders "cancelled"; a detail would duplicate it.
+        this.store.addActivity({
+          id: call.id || id(),
+          name: call.name,
+          label,
+          args: call.arguments,
+          outcome: 'rejected',
+        });
+        return { error: 'user_declined: the user did not approve this action' };
+      }
+    } else {
+      this.init.onToolCall?.({ name: call.name, args: call.arguments, approved: true });
+    }
+
+    if (this.tools.riskOf(call.name) === 'write') {
+      // Prevents the transport-level retry path from replaying a side effect.
+      this.turnDidWrite = true;
+    }
+
+    const execution = await this.tools.execute(call.name, call.arguments);
+    this.store.addActivity({
+      id: call.id || id(),
+      name: call.name,
+      label,
+      args: call.arguments,
+      outcome: execution.ok ? 'done' : 'failed',
+      detail: execution.ok ? undefined : execution.error,
+    });
+
+    return execution.ok ? { result: execution.result } : { error: execution.error };
+  }
+
+  private askConfirmation(call: ToolCallRequest, label: string): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      this.confirmResolver = resolve;
+      this.store.setPending({
+        id: call.id || id(),
+        name: call.name,
+        label,
+        args: call.arguments,
+        risk: this.tools.riskOf(call.name),
+      });
+    });
+  }
+
+  /** Human-readable action label, preferring the page control's name over a raw ref. */
+  private describeCall(call: ToolCallRequest): string {
+    const ref = call.arguments.ref;
+    if (typeof ref === 'string') {
+      const described = this.page.registry.describe(ref);
+      if (described) {
+        const suffix =
+          typeof call.arguments.value === 'string'
+            ? `：${call.arguments.value}`
+            : typeof call.arguments.option === 'string'
+              ? `：${call.arguments.option}`
+              : '';
+        return `${call.name} → ${described.name}${suffix}`;
+      }
+    }
+    return call.name;
+  }
+
+  private async requestTurn(
+    text: string,
+    assistantId: string,
+    isRetryAfterAuth: boolean,
+  ): Promise<TurnOutcome> {
     const token = await this.init.getAccessToken();
     const pageContext = await this.page.snapshot();
     const body = await this.context.buildPayload(pageContext, text);
+    body.clientTools = this.tools.schemas();
     if (this.threadId) {
       body.threadId = this.threadId;
     }
 
     try {
-      await streamChat({
+      return await streamChat({
         gatewayUrl: this.init.gatewayUrl,
         token,
         body,
         signal: this.abort?.signal,
         timeoutMs: this.init.requestTimeoutMs,
-        handlers: {
-          onThread: (threadId) => {
-            this.threadId = threadId;
-            this.store.setThreadId(threadId);
-            this.rememberThread(threadId);
-          },
-          onDelta: (delta) => this.store.appendDelta(assistantId, delta),
-          onDone: () => {
-            this.store.flush();
-            this.store.setMessageStatus(assistantId, 'done');
-          },
-        },
+        handlers: this.streamHandlers(assistantId),
       });
     } catch (err) {
-      const unauthorized = err instanceof CopilotError && err.code === 'unauthorized';
-      if (unauthorized && !isRetryAfterAuth) {
-        await this.runTurn(text, assistantId, true);
-        return;
+      if (this.canRetryAfterAuth(err, isRetryAfterAuth)) {
+        return this.requestTurn(text, assistantId, true);
       }
       throw err;
     }
   }
 
-  private handleTurnFailure(err: unknown, assistantId: string): void {
-    if (isAbort(err)) {
-      const current = this.store
-        .getSnapshot()
-        .messages.find((m) => m.id === assistantId);
-      const stoppedNote = this.t('stopped');
-      this.store.updateMessage(assistantId, {
-        status: 'stopped',
-        content: current?.content ? `${current.content}\n\n${stoppedNote}` : stoppedNote,
+  private async continueAfterTool(
+    call: ToolCallRequest,
+    settled: { result?: unknown; error?: string },
+    assistantId: string,
+    isRetryAfterAuth = false,
+  ): Promise<TurnOutcome> {
+    const token = await this.init.getAccessToken();
+    // Re-observe: a page action almost certainly changed the DOM.
+    const pageContext = await this.page.refresh();
+    const businessContext = await this.context.getBusinessContext();
+
+    try {
+      return await streamToolResult({
+        gatewayUrl: this.init.gatewayUrl,
+        token,
+        threadId: this.threadId!,
+        signal: this.abort?.signal,
+        timeoutMs: this.init.requestTimeoutMs,
+        handlers: this.streamHandlers(assistantId),
+        body: {
+          appId: this.init.appId,
+          toolCallId: call.id,
+          name: call.name,
+          result: settled.result,
+          error: settled.error,
+          pageContext,
+          businessContext,
+          clientTools: this.tools.schemas(),
+        },
       });
-      this.store.setRetryable(true);
+    } catch (err) {
+      if (this.canRetryAfterAuth(err, isRetryAfterAuth)) {
+        return this.continueAfterTool(call, settled, assistantId, true);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * A 401 mid-turn usually means the JWT expired while the panel was open; refetching the token and
+   * replaying once is safe. Never replay a turn that already performed a write.
+   */
+  private canRetryAfterAuth(err: unknown, alreadyRetried: boolean): boolean {
+    return (
+      err instanceof CopilotError &&
+      err.code === 'unauthorized' &&
+      !alreadyRetried &&
+      !this.turnDidWrite
+    );
+  }
+
+  private streamHandlers(assistantId: string) {
+    return {
+      onThread: (threadId: string) => {
+        this.threadId = threadId;
+        this.store.setThreadId(threadId);
+        this.rememberThread(threadId);
+      },
+      onDelta: (delta: string) => this.store.appendDelta(assistantId, delta),
+    };
+  }
+
+  private handleTurnFailure(err: unknown, assistantId: string | undefined): void {
+    const targetId = assistantId ?? this.lastAssistantId();
+    if (!targetId) return;
+
+    if (isAbort(err)) {
+      const current = this.store.getSnapshot().messages.find((m) => m.id === targetId);
+      const note = this.t('stopped');
+      this.store.updateMessage(targetId, {
+        status: 'stopped',
+        content: current?.content ? `${current.content}\n\n${note}` : note,
+      });
+      this.store.setRetryable(!this.turnDidWrite);
       return;
     }
 
     const code = err instanceof CopilotError ? err.code : 'unknown';
     const message = this.t(errorMessageKey(code));
-    const existing = this.store.getSnapshot().messages.find((m) => m.id === assistantId);
+    const existing = this.store.getSnapshot().messages.find((m) => m.id === targetId);
 
-    this.store.updateMessage(assistantId, {
+    this.store.updateMessage(targetId, {
       status: 'error',
       errorCode: code,
       // Keep any partial answer and append the reason, so nothing the model produced is lost.
-      content: existing?.content ? `${existing.content}\n\n${this.t('errorPrefix')}${message}` : message,
+      content: existing?.content
+        ? `${existing.content}\n\n${this.t('errorPrefix')}${message}`
+        : message,
     });
-    this.store.setRetryable(true);
+    // Offering retry after a completed write could duplicate the side effect.
+    this.store.setRetryable(!this.turnDidWrite);
     this.init.onError?.({ code, message: err instanceof Error ? err.message : String(err) });
+  }
+
+  private lastAssistantId(): string | undefined {
+    const messages = this.store.getSnapshot().messages;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]!.role === 'assistant') return messages[i]!.id;
+    }
+    return undefined;
   }
 
   private storageKey(): string {

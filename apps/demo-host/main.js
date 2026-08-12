@@ -106,6 +106,43 @@ async function boot() {
       position: 'bottom-right',
       primaryColor: '#0f4c81',
     },
+    // Declarative business capabilities. `write` risk means the user must approve each call.
+    tools: [
+      {
+        name: 'approveOrder',
+        description: '审批当前订单，将状态改为审批中',
+        parameters: {
+          type: 'object',
+          properties: { orderId: { type: 'string', description: '订单号' } },
+          required: ['orderId'],
+        },
+        risk: 'write',
+        execute({ orderId }) {
+          if (orderId && orderId !== order.orderId) {
+            throw new Error(`当前页面是订单 ${order.orderId}，不能审批 ${orderId}`);
+          }
+          setStatus('审批中');
+          notify('AI 已提交审批');
+          return { orderId: order.orderId, status: order.status };
+        },
+      },
+      {
+        name: 'exportOrder',
+        description: '导出当前订单为 Excel',
+        parameters: { type: 'object', properties: {} },
+        risk: 'write',
+        execute() {
+          notify('AI 已导出 Excel');
+          return { exported: true, orderId: order.orderId };
+        },
+      },
+    ],
+    // Generic DOM automation. Filling fields is auto-approved here so form filling stays fluid;
+    // clicking still requires confirmation because it can submit.
+    pageActions: {
+      enabled: true,
+      autoApprove: ['page_fill', 'page_select'],
+    },
     async getAccessToken() {
       // Refresh slightly before expiry so a long-lived page never sends a stale token.
       if (!cached || Date.now() > expiresAt) {
@@ -120,6 +157,9 @@ async function boot() {
     },
     onError(error) {
       console.warn('[demo-host] copilot error', error);
+    },
+    onToolCall(event) {
+      console.info('[demo-host] tool call', event);
     },
   });
 
