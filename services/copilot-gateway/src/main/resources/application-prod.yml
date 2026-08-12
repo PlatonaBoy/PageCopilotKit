@@ -16,6 +16,11 @@ spring:
 
 copilot:
   cors-allow-all-patterns: false
+  tools:
+    # Actions are opt-in in production. Enabling them without an allowlist would let any tool a
+    # client declares reach the model, so turn this on only together with copilot.tools.allowed
+    # and copilot.tools.required-permission (see docs/actions.md).
+    enabled: ${COPILOT_TOOLS_ENABLED:false}
 
 logging:
   level:

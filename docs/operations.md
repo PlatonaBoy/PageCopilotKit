@@ -27,6 +27,25 @@ used in production**. Always set `SPRING_PROFILES_ACTIVE=prod` for real deployme
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | optional | Any OpenAI-compatible endpoint. |
 | `COPILOT_RATE_USER` / `COPILOT_RATE_TENANT` | optional | Requests per minute. Defaults 20 / 200. |
 | `COPILOT_LLM_TIMEOUT` | optional | Default `45s`. |
+| `COPILOT_TOOLS_ENABLED` | optional | **`false` in prod by default.** Enables AI actions (tool calling / page operations). |
+
+### Tool calling configuration
+
+When enabling actions, configure the policy in the same breath — an enabled tool layer with an empty
+allowlist offers every client-declared tool to the model (a startup warning is logged):
+
+```yaml
+copilot:
+  tools:
+    enabled: true
+    max-steps-per-turn: 5          # tool round-trips per user turn
+    allowed:                       # per-application tool allowlist
+      crm: [approveOrder, exportOrder, page_click, page_fill, page_read]
+    required-permission:           # JWT permission required per tool
+      approveOrder: order:approve
+```
+
+Full model and security rationale: [actions.md](actions.md).
 
 ## Deploy with Docker
 
@@ -86,13 +105,20 @@ to your data policy.
 - [ ] `COPILOT_JWT_ISSUER` matches the real identity provider
 - [ ] `COPILOT_CORS_ORIGINS` lists only your application origins (no wildcard)
 - [ ] `COPILOT_MOCK_LLM=false` and the model key is configured
-- [ ] `GET /v1/demo/token` returns **404**
+- [ ] `POST /v1/demo/token` returns **404**
 - [ ] `GET /v1/audits` without `audit:read` returns **403**
 - [ ] Cross-user access to another `threadId` returns **404**
 - [ ] PostgreSQL reachable; Flyway migrations applied on boot
 - [ ] Readiness/liveness probes wired to the actuator endpoints
 - [ ] Log aggregation captures `traceId` and `tenantId`
 - [ ] Audit retention job scheduled
+
+Actions (only when `COPILOT_TOOLS_ENABLED=true`):
+
+- [ ] `copilot.tools.allowed.<appId>` lists exactly the operations you intend to automate
+- [ ] Every consequential tool has an entry in `copilot.tools.required-permission`
+- [ ] Startup log shows **no** "enabled without an application allowlist" warning
+- [ ] Full checklist in [actions.md](actions.md) reviewed
 
 ## Scaling notes
 

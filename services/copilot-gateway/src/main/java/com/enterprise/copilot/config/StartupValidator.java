@@ -44,6 +44,11 @@ public class StartupValidator implements ApplicationListener<ApplicationReadyEve
     if (environment.matchesProfiles("prod") && properties.getLlm().isMock()) {
       log.warn("Production profile is running with the mock LLM — set COPILOT_MOCK_LLM=false");
     }
+    if (properties.getTools().isEnabled() && properties.getTools().getAllowed().isEmpty()) {
+      log.warn(
+          "Tool calling is enabled without an application allowlist — any tool a client declares"
+              + " will be offered to the model. Configure copilot.tools.allowed per appId.");
+    }
     log.info(
         "Gateway configuration validated (apps={}, rateLimit={}/min per user, mockLlm={})",
         properties.getAllowedAppIds(),

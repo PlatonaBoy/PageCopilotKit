@@ -12,12 +12,14 @@ import java.util.Map;
 import org.springframework.stereotype.Component;
 
 /**
- * Deterministic offline answerer used when no model is configured.
+ * Deterministic offline answerer and action planner used when no model is configured.
  *
- * <p>It is a retrieval stub, not a language model: it resolves the question against business
- * context keys (with Chinese/English aliases) and falls back to keyword recall over the page text.
- * When nothing matches it refuses instead of echoing the question, mirroring the grounding policy
- * the real model is instructed to follow.
+ * <p>It is a heuristic stub, not a language model. Questions are resolved against business context
+ * keys (with Chinese/English aliases) with keyword recall over the page text as fallback; requests
+ * phrased as actions ("帮我审批", "填写X为Y") are mapped onto the permitted tools — field edits first,
+ * then business tools by description overlap, then a click on the named control. When nothing
+ * matches it refuses instead of echoing the question, mirroring the grounding policy the real model
+ * is instructed to follow. It never chains actions on its own.
  */
 @Component
 public class MockAnswerService {

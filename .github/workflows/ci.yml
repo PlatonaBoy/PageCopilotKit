@@ -75,6 +75,9 @@ jobs:
         env:
           SPRING_PROFILES_ACTIVE: dev
           COPILOT_MOCK_LLM: "true"
+          # The whole suite runs as one demo user; the default 20/min per-user limit
+          # would intermittently 429 the later tests.
+          COPILOT_RATE_USER: "500"
         run: |
           mvn -B -q -DskipTests package
           nohup java -jar target/*.jar > /tmp/gateway.log 2>&1 &

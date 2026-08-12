@@ -25,9 +25,23 @@ async function ask(page: Page, question: string) {
 }
 
 async function waitForAnswer(page: Page) {
-  await expect(shadow(page).locator('.panel')).toHaveAttribute('data-streaming', 'false', {
-    timeout: 30_000,
-  });
+  // Fail fast if a confirmation card appears: these are Q&A flows, and waiting on
+  // data-streaming would otherwise hang for the full timeout on an unexpected tool call.
+  await page.waitForFunction(
+    (root) => {
+      const shadowRoot = document.querySelector(root)?.shadowRoot;
+      const confirming = Boolean(shadowRoot?.querySelector('.confirm'));
+      const streaming =
+        shadowRoot?.querySelector('.panel')?.getAttribute('data-streaming') === 'true';
+      return confirming || !streaming;
+    },
+    ROOT,
+    { timeout: 30_000 },
+  );
+  await expect(
+    shadow(page).locator('.confirm'),
+    'a Q&A turn must not propose an action',
+  ).toHaveCount(0);
   return shadow(page).locator('.row.assistant .bubble').last();
 }
 
