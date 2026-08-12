@@ -1,0 +1,44 @@
+# Production-shaped local stack: PostgreSQL + gateway on the prod profile.
+# Copy .env.example to .env and set COPILOT_JWT_SECRET before running.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: copilot
+      POSTGRES_USER: copilot
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - copilot-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U copilot -d copilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ./services/copilot-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_URL: jdbc:postgresql://postgres:5432/copilot
+      DB_USER: copilot
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      # Must be at least 32 bytes or the gateway refuses to start.
+      COPILOT_JWT_SECRET: ${COPILOT_JWT_SECRET:?set COPILOT_JWT_SECRET in .env}
+      COPILOT_JWT_ISSUER: ${COPILOT_JWT_ISSUER:-enterprise-copilot}
+      COPILOT_CORS_ORIGINS: ${COPILOT_CORS_ORIGINS:-http://localhost:5173}
+      COPILOT_ALLOWED_APP_IDS: ${COPILOT_ALLOWED_APP_IDS:-crm,demo}
+      COPILOT_MOCK_LLM: ${COPILOT_MOCK_LLM:-true}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  copilot-pgdata:

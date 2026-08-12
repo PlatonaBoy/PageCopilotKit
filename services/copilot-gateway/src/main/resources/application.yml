@@ -1,0 +1,97 @@
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  error:
+    include-stacktrace: never
+    include-message: never
+
+spring:
+  application:
+    name: copilot-gateway
+  profiles:
+    default: dev
+  threads:
+    virtual:
+      enabled: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.batch_size: 20
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:not-set}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      chat:
+        options:
+          model: ${OPENAI_MODEL:gpt-4o-mini}
+          temperature: 0.2
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+copilot:
+  # No default: a weak or missing secret must fail startup rather than ship silently.
+  jwt-secret: ${COPILOT_JWT_SECRET:}
+  jwt-issuer: ${COPILOT_JWT_ISSUER:enterprise-copilot}
+  jwt-require-issuer: true
+  jwt-clock-skew: 30s
+  allowed-app-ids: ${COPILOT_ALLOWED_APP_IDS:crm,demo}
+  cors-allowed-origins: ${COPILOT_CORS_ORIGINS:}
+  cors-allow-all-patterns: false
+  llm:
+    mock: ${COPILOT_MOCK_LLM:true}
+    timeout: ${COPILOT_LLM_TIMEOUT:45s}
+    max-retries: 2
+    retry-backoff: 400ms
+    breaker-failure-threshold: 5
+    breaker-open-duration: 30s
+  rate-limit:
+    enabled: true
+    per-user-per-minute: ${COPILOT_RATE_USER:20}
+    per-tenant-per-minute: ${COPILOT_RATE_TENANT:200}
+  tools:
+    enabled: ${COPILOT_TOOLS_ENABLED:true}
+    max-steps-per-turn: 5
+    # Optional hardening. `allowed` restricts which tool names an application may use at all;
+    # `required-permission` demands a JWT permission before a tool may run. Example:
+    #   allowed:
+    #     crm: [approveOrder, page_click, page_fill, page_read]
+    #   required-permission:
+    #     approveOrder: order:approve
+    allowed: {}
+    required-permission: {}
+  history:
+    max-turns: 8
+    max-chars: 6000
+    retain-messages: 200
+  context:
+    max-business-bytes: 4096
+    max-summary-chars: 12000
+    max-actionable-elements: 40
+    max-message-chars: 4000
+    max-selection-chars: 2000
+    max-prompt-chars: 24000
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{traceId:-}] [%X{tenantId:-}] %logger{36} - %msg%n"
+  level:
+    com.enterprise.copilot: INFO

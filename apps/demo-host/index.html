@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>订单详情 - Demo CRM</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Demo CRM</div>
+      <nav>
+        <a href="#">客户</a>
+        <a href="#" class="active">订单</a>
+        <a href="#">报表</a>
+      </nav>
+      <div class="user">张三 · 销售经理</div>
+    </header>
+
+    <main class="page">
+      <h1>订单详情</h1>
+      <p class="subtitle">订单号 <strong id="order-id">ORD-123456</strong></p>
+
+      <section class="detail">
+        <div class="field">
+          <label>客户</label>
+          <div>华东制造有限公司（VIP）</div>
+        </div>
+        <div class="field">
+          <label>金额</label>
+          <div>¥ 50,000.00</div>
+        </div>
+        <div class="field">
+          <label>状态</label>
+          <div id="order-status" class="status">待审批</div>
+        </div>
+        <div class="field">
+          <label>客户等级</label>
+          <div>VIP</div>
+        </div>
+        <div class="field">
+          <label>申请人</label>
+          <div>李四</div>
+        </div>
+        <div class="field wide">
+          <label>备注</label>
+          <div>年度框架合同首笔订单，需经理审批后发货。</div>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button type="button" id="btn-approve" data-action="approve">提交审批</button>
+        <button type="button" id="btn-reject" data-action="reject" class="secondary">拒绝</button>
+        <button type="button" id="btn-export" data-action="export" class="secondary">导出 Excel</button>
+        <a href="#history" id="link-history">查看历史</a>
+      </div>
+
+      <section class="form">
+        <h2>审批意见</h2>
+        <div class="form-grid">
+          <label for="reviewer">审批人</label>
+          <input id="reviewer" name="reviewer" type="text" placeholder="填写审批人姓名" />
+
+          <label for="priority">优先级</label>
+          <select id="priority" name="priority">
+            <option value="normal">普通</option>
+            <option value="high">加急</option>
+            <option value="urgent">特急</option>
+          </select>
+
+          <label for="comment">审批备注</label>
+          <textarea id="comment" name="comment" rows="2" placeholder="填写审批备注"></textarea>
+        </div>
+      </section>
+
+      <section class="lines">
+        <h2>订单明细</h2>
+        <table>
+          <caption>本次发货清单</caption>
+          <thead>
+            <tr><th>商品</th><th>规格</th><th>数量</th><th>小计</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>热轧钢板</td><td>3mm</td><td>20 吨</td><td>¥ 36,000.00</td></tr>
+            <tr><td>冷轧卷板</td><td>1.5mm</td><td>8 吨</td><td>¥ 14,000.00</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="history" class="history">
+        <h2>审批历史</h2>
+        <ul>
+          <li>2026-07-18 09:12 · 李四 创建订单</li>
+          <li>2026-07-18 10:05 · 系统 进入待审批</li>
+        </ul>
+      </section>
+
+      <!-- Excluded from the copilot's page snapshot. -->
+      <section class="internal" data-copilot-ignore>
+        <h2>内部调试信息</h2>
+        <p>该区块标记了 data-copilot-ignore，不会进入 AI 上下文。</p>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+
+    <!-- Built SDK IIFE -->
+    <script src="/vendor/enterprise-copilot.js"></script>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

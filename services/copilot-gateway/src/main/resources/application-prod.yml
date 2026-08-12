@@ -1,0 +1,23 @@
+# Production profile: PostgreSQL, no token minting, explicit CORS allowlist.
+# Required environment: COPILOT_JWT_SECRET, COPILOT_CORS_ORIGINS, DB_URL/DB_USER/DB_PASSWORD.
+# For a real model also set COPILOT_MOCK_LLM=false and OPENAI_API_KEY.
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/copilot}
+    driver-class-name: org.postgresql.Driver
+    username: ${DB_USER:copilot}
+    password: ${DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX:15}
+      connection-timeout: 10000
+  h2:
+    console:
+      enabled: false
+
+copilot:
+  cors-allow-all-patterns: false
+
+logging:
+  level:
+    root: INFO
+    com.enterprise.copilot: INFO
