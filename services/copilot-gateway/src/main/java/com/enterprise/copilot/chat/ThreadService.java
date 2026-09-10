@@ -117,10 +117,16 @@ public class ThreadService {
 
   @Transactional
   public void appendAssistantTurn(ChatThread thread, String content) {
+    appendAssistantTurn(thread, content, null);
+  }
+
+  /** {@code citationsJson} is the serialized source list the answer was grounded on, or null. */
+  @Transactional
+  public void appendAssistantTurn(ChatThread thread, String content, String citationsJson) {
     if (content == null || content.isBlank()) {
       return;
     }
-    turns.save(ChatTurn.of(thread.getThreadId(), ChatTurn.Role.ASSISTANT, content));
+    turns.save(ChatTurn.of(thread.getThreadId(), ChatTurn.Role.ASSISTANT, content, citationsJson));
     thread.touch();
     threads.save(thread);
     pruneIfNeeded(thread.getThreadId());

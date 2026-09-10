@@ -2,6 +2,7 @@ package com.enterprise.copilot.chat;
 
 import com.enterprise.copilot.api.ApiException;
 import com.enterprise.copilot.api.dto.ChatDtos.ChatRequest;
+import com.enterprise.copilot.api.dto.ChatDtos.Citation;
 import com.enterprise.copilot.api.dto.ChatDtos.ClientTool;
 import com.enterprise.copilot.api.dto.ChatDtos.ToolResultRequest;
 import com.enterprise.copilot.audit.AuditRecord;
@@ -9,6 +10,8 @@ import com.enterprise.copilot.audit.AuditService;
 import com.enterprise.copilot.auth.UserPrincipal;
 import com.enterprise.copilot.chat.PromptBuilder.BuiltPrompt;
 import com.enterprise.copilot.config.CopilotProperties;
+import com.enterprise.copilot.knowledge.KnowledgeService;
+import com.enterprise.copilot.knowledge.RetrievedSnippet;
 import com.enterprise.copilot.ratelimit.RateLimiter;
 import com.enterprise.copilot.tools.ToolPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,6 +42,7 @@ public class ChatService {
   private final AuditService auditService;
   private final RateLimiter rateLimiter;
   private final ToolPolicy toolPolicy;
+  private final KnowledgeService knowledgeService;
   private final ObjectMapper objectMapper;
 
   public ChatService(
@@ -50,6 +54,7 @@ public class ChatService {
       AuditService auditService,
       RateLimiter rateLimiter,
       ToolPolicy toolPolicy,
+      KnowledgeService knowledgeService,
       ObjectMapper objectMapper) {
     this.properties = properties;
     this.promptBuilder = promptBuilder;
@@ -59,6 +64,7 @@ public class ChatService {
     this.auditService = auditService;
     this.rateLimiter = rateLimiter;
     this.toolPolicy = toolPolicy;
+    this.knowledgeService = knowledgeService;
     this.objectMapper = objectMapper;
   }
 
@@ -69,7 +75,11 @@ public class ChatService {
     // real HTTP status codes instead of an SSE error inside a 200 response.
     ChatThread thread = threadService.resolveOrCreate(user, request.threadId(), request.appId());
     List<ChatTurn> history = threadService.loadHistoryForPrompt(thread.getThreadId());
-    BuiltPrompt prompt = promptBuilder.build(user, request, history);
+    // Retrieval is scoped by the verified tenant and the thread's application, never by anything
+    // the browser asserts, so one tenant's documents can never ground another tenant's answer.
+    List<RetrievedSnippet> knowledge =
+        knowledgeService.retrieve(user.tenantId(), thread.getAppId(), request.message());
+    BuiltPrompt prompt = promptBuilder.build(user, request, history, knowledge);
     List<ClientTool> tools = toolPolicy.permitted(user, request.appId(), request.clientTools());
 
     threadService.appendUserTurn(thread, request.message());
@@ -81,12 +91,14 @@ public class ChatService {
         request.message(),
         prompt,
         tools,
+        knowledge,
         () -> mockAnswerService.plan(
             request.message(),
             request.pageContext(),
             request.businessContext(),
             tools,
-            history));
+            history,
+            knowledge));
   }
 
   /**
@@ -121,9 +133,17 @@ public class ChatService {
     threadService.appendToolResultTurn(thread, request.name(), outcome);
 
     List<ChatTurn> history = threadService.loadHistoryForPrompt(threadId);
+    // A continuation reports on an action that already ran; there is no new user question to
+    // retrieve against, so no knowledge is fetched and no citation is claimed.
     BuiltPrompt prompt =
         promptBuilder.buildContinuation(
-            user, appId, request.pageContext(), request.businessContext(), history, outcome);
+            user,
+            appId,
+            request.pageContext(),
+            request.businessContext(),
+            history,
+            List.of(),
+            outcome);
 
     return run(
         user,
@@ -132,6 +152,7 @@ public class ChatService {
         "[tool-result] " + request.name(),
         prompt,
         tools,
+        List.of(),
         // Offline continuation just reports the outcome; it never chains further actions on its own.
         () -> new MockAnswerService.MockPlan(null, outcome + "（离线模式）"));
   }
@@ -159,6 +180,7 @@ public class ChatService {
       String question,
       BuiltPrompt prompt,
       List<ClientTool> tools,
+      List<RetrievedSnippet> knowledge,
       java.util.function.Supplier<MockAnswerService.MockPlan> mockPlanner) {
 
     String traceId = "trc_" + UUID.randomUUID().toString().replace("-", "");
@@ -176,8 +198,15 @@ public class ChatService {
           MDC.put("tenantId", user.tenantId());
           MDC.put("threadId", thread.getThreadId());
           StringBuilder full = new StringBuilder();
+          List<Citation> citations = toCitations(knowledge);
+          String citationsJson = serializeCitations(citations);
           try {
             emit(emitter, "thread", Map.of("threadId", thread.getThreadId()));
+            if (!citations.isEmpty()) {
+              // Sent before the first token so the UI can show what the answer is grounded on
+              // while it streams, rather than sources appearing after the fact.
+              emit(emitter, "citations", Map.of("citations", citations));
+            }
 
             ModelClient.ToolInvocation toolCall;
             if (modelClient.isMockMode()) {
@@ -202,11 +231,11 @@ public class ChatService {
             }
 
             if (toolCall != null) {
-              dispatchToolCall(emitter, user, thread, appId, tools, toolCall, full);
+              dispatchToolCall(emitter, user, thread, appId, tools, toolCall, full, citationsJson);
             } else {
               String answer = full.toString();
               emit(emitter, "text.done", Map.of("content", answer));
-              threadService.appendAssistantTurn(thread, answer);
+              threadService.appendAssistantTurn(thread, answer, citationsJson);
             }
 
             emit(emitter, "done", Map.of("traceId", traceId));
@@ -224,7 +253,7 @@ public class ChatService {
             emitter.complete();
           } catch (ClientDisconnectedException ex) {
             log.info("Client disconnected mid-stream; aborting upstream");
-            threadService.appendAssistantTurn(thread, full.toString());
+            threadService.appendAssistantTurn(thread, full.toString(), citationsJson);
             audit(
                 user,
                 appId,
@@ -261,7 +290,8 @@ public class ChatService {
       String appId,
       List<ClientTool> tools,
       ModelClient.ToolInvocation call,
-      StringBuilder full)
+      StringBuilder full,
+      String citationsJson)
       throws IOException {
     ToolPolicy.Decision decision = toolPolicy.authorize(user, appId, call.name(), tools);
     if (!decision.allowed()) {
@@ -278,7 +308,7 @@ public class ChatService {
     if (!full.isEmpty()) {
       // Any prose the model produced alongside the request is still a completed assistant turn.
       emit(emitter, "text.done", Map.of("content", full.toString()));
-      threadService.appendAssistantTurn(thread, full.toString());
+      threadService.appendAssistantTurn(thread, full.toString(), citationsJson);
     }
     emit(
         emitter,
@@ -374,6 +404,36 @@ public class ChatService {
       return objectMapper.writeValueAsString(value);
     } catch (Exception ex) {
       return String.valueOf(value);
+    }
+  }
+
+  /** Drops the retrieval score: it is an internal ranking artifact, not part of the client contract. */
+  private static List<Citation> toCitations(List<RetrievedSnippet> knowledge) {
+    if (knowledge == null || knowledge.isEmpty()) {
+      return List.of();
+    }
+    return knowledge.stream()
+        .map(
+            snippet ->
+                new Citation(
+                    snippet.index(),
+                    snippet.docId(),
+                    snippet.title(),
+                    snippet.source(),
+                    snippet.snippet()))
+        .toList();
+  }
+
+  private String serializeCitations(List<Citation> citations) {
+    if (citations.isEmpty()) {
+      return null;
+    }
+    try {
+      return objectMapper.writeValueAsString(citations);
+    } catch (Exception ex) {
+      // Provenance is worth showing live even if it cannot be persisted; never fail the turn.
+      log.warn("Failed to serialize citations; the turn will restore without sources", ex);
+      return null;
     }
   }
 

@@ -55,7 +55,14 @@ public final class ChatDtos {
 
   public record HealthResponse(String status) {}
 
-  public record ThreadMessage(String role, String content, Instant createdAt) {}
+  /**
+   * A knowledge source an answer was grounded on. {@code index} is the marker the model cites in
+   * the answer text ("[1]"), so the UI can line a chip up with the sentence that used it.
+   */
+  public record Citation(int index, String docId, String title, String source, String snippet) {}
+
+  public record ThreadMessage(
+      String role, String content, List<Citation> citations, Instant createdAt) {}
 
   public record ThreadMessagesResponse(String threadId, List<ThreadMessage> messages) {}
 }

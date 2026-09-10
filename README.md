@@ -20,6 +20,7 @@
 |------|------|
 | [docs/architecture.md](docs/architecture.md) | 分层架构、上下文模型、威胁模型 |
 | [docs/actions.md](docs/actions.md) | **页面操作与工具调用**：接入、risk 分级、安全模型 |
+| [docs/knowledge.md](docs/knowledge.md) | **企业知识库**：接入、检索、引用、租户隔离 |
 | [docs/api.md](docs/api.md) | 接口契约（SSE 事件、错误码、JWT 声明） |
 | [docs/operations.md](docs/operations.md) | 部署、配置、上线检查清单 |
 | [docs/design-v1-hardening.md](docs/design-v1-hardening.md) | V1 加固设计与取舍依据 |
@@ -41,7 +42,7 @@
 | **业务工具调用**（`registerTool`，服务端权限校验） | 已支持 |
 | **页面操作**（点击/填表/下拉/读取，元素执行前重校验） | 已支持 |
 | **risk 分级确认**（`read` 直接执行，`write` 需人工确认） | 已支持 |
-| 企业知识库 / RAG / 引用来源 | 后续 |
+| **企业知识库**（租户隔离、BM25 检索、答案引用） | 已支持 |
 | 跨页 / 跨 iframe / 深层 Shadow DOM 感知 | 后续 |
 
 ## 快速开始（本地）
@@ -86,6 +87,12 @@ npm run dev --prefix apps/demo-host
 - 「客户是谁」（验证多轮上下文）
 - 「当前页面有哪些按钮」
 
+**知识库**（详见 [docs/knowledge.md](docs/knowledge.md)；`dev` profile 会写入演示文档）
+
+- 「退货时限是多久」→ 引用《退货与退款政策》
+- 「审批超过 4 小时怎么办」
+- 「发货后多久能开票」
+
 **操作**（详见 [docs/actions.md](docs/actions.md)）
 
 - 「帮我审批这个订单」→ 弹出确认卡片，确认后页面状态变为「审批中」
@@ -113,9 +120,9 @@ npm run test:e2e        # 浏览器端到端（需先起 gateway 与 demo）
 
 | 套件 | 覆盖 |
 |------|------|
-| SDK 单测（Vitest，77 项） | SSE 解析边界、上下文预算、页面提取与脱敏、状态批处理、Widget 与确认卡片、工具注册与 risk 判定、页面动作与元素身份校验、i18n |
-| Gateway 测试（JUnit，61 项） | Prompt 组装与预算、Mock 规划器、鉴权矩阵、多轮持久化、租户隔离、CORS、限额、工具白名单与权限、tool-result 绑定校验与应用隔离 |
-| E2E（Playwright，18 项） | 嵌入加载、多轮上下文、刷新恢复、清空、错误重试、忽略区域、确认/拒绝、页面填表与下拉、权限拒绝 |
+| SDK 单测（Vitest，jsdom） | SSE 解析边界、上下文预算、页面提取与脱敏、状态批处理、Widget 与确认卡片、工具注册与 risk 判定、页面动作与元素身份校验、引用卡片、i18n |
+| Gateway 测试（JUnit） | Prompt 组装与预算、Mock 规划器、鉴权矩阵、多轮持久化、租户隔离、CORS、限额、工具白名单与权限、tool-result 绑定校验与应用隔离、知识库接入/检索/引用 |
+| E2E（Playwright） | 嵌入加载、多轮上下文、刷新恢复、清空、错误重试、忽略区域、确认/拒绝、页面填表与下拉、权限拒绝、知识库引用 |
 
 若机器已装 Chrome，可用 `CHROME_PATH=/usr/bin/google-chrome npm run test:e2e` 复用它，省去浏览器下载。
 
@@ -139,4 +146,5 @@ docs/                      架构、接口、运维、设计
 - **写操作需人工确认**，且确认卡片展示实际参数；可能重放动作的请求在写入后禁止自动重试。
 - **工具结果必须对应真实待处理调用**，无法伪造「已成功」；线程的应用身份不可中途切换。
 - **页面动作执行前重新校验元素**（存在、可见、可用、标签未变），页面变化时失败而非误点。
+- **知识库按租户隔离**，检索用已验证的 JWT `tenantId`，文档不能跨租户引用；答案带来源，刷新后仍在。
 - 生产部署前请对照 [docs/operations.md](docs/operations.md) 与 [docs/actions.md](docs/actions.md) 的上线清单。

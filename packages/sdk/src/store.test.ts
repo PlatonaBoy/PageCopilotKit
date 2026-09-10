@@ -52,6 +52,20 @@ describe('CopilotStore', () => {
     expect(store.getSnapshot().streaming).toBe(false);
   });
 
+  it('attaches citations to a message without dropping its content', () => {
+    const store = new CopilotStore();
+    store.appendMessage({ id: 'a1', role: 'assistant', content: '根据知识库', status: 'streaming' });
+
+    store.updateMessage('a1', {
+      citations: [{ index: 1, docId: 'refund-policy', title: '退货政策', snippet: '30 日' }],
+    });
+
+    const message = store.getSnapshot().messages[0]!;
+    expect(message.content).toBe('根据知识库');
+    expect(message.citations).toHaveLength(1);
+    expect(message.citations![0]!.title).toBe('退货政策');
+  });
+
   it('stops notifying after dispose', () => {
     const store = new CopilotStore();
     const listener = vi.fn();

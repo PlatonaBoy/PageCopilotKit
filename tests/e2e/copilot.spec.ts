@@ -131,7 +131,15 @@ test('never uploads data-copilot-ignore regions in the page context', async ({ p
   expect(sent).toContain('订单详情');
 });
 
-test('closes the panel with Escape', async ({ page }) => {
+test('answers a knowledge-base question with a visible citation', async ({ page }) => {
+  await openPanel(page);
+  await ask(page, '退货时限是多久');
+
+  const answer = await waitForAnswer(page);
+  await expect(answer).toContainText('30');
+  await expect(shadow(page).locator('.citations')).toBeVisible();
+  await expect(shadow(page).locator('.citation-title').first()).toContainText('退货');
+});
   await openPanel(page);
   await shadow(page).locator('textarea').press('Escape');
   await expect(shadow(page).locator('.panel')).not.toBeVisible();

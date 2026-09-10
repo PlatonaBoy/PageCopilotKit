@@ -9,9 +9,9 @@ Embeddable AI assistant for business web applications. A host page loads one scr
 and gets a bottom-right copilot that understands the current page and the app's business context,
 and holds a multi-turn conversation about them.
 
-Scope of V1: **question answering about the current page.** Acting on the page (clicking, filling
-forms) and enterprise knowledge retrieval are later phases — see
-[design-v1-hardening.md](design-v1-hardening.md).
+V1 answers questions about the **current page**, **the host's business context**, and the
+**tenant's knowledge base**, and can act on the page through registered tools. See
+[knowledge.md](knowledge.md) and [actions.md](actions.md).
 
 ## Design principles
 
@@ -40,6 +40,7 @@ flowchart TB
   Guard[Guard_JWT_ratelimit]
   Threads[ThreadService_history]
   Prompt[PromptBuilder_budget]
+  Knowledge[KnowledgeService_BM25]
   Model[ModelClient_timeout_retry_breaker]
   Mock[MockAnswerService_offline]
   Audit[AuditService_success_and_failure]
@@ -56,11 +57,13 @@ flowchart TB
   GW --> Guard
   Guard --> Threads
   Threads --> Prompt
+  Prompt --> Knowledge
   Prompt --> Model
   Prompt --> Mock
   Model --> LLM
   GW --> Audit
   Threads --> DB
+  Knowledge --> DB
   Audit --> DB
 ```
 
@@ -77,7 +80,8 @@ flowchart TB
 | `chat/ThreadService` | Conversation persistence and ownership enforcement |
 | `chat/PromptBuilder` | Grounded prompt assembly under a combined character budget |
 | `chat/ModelClient` | Model call with timeout, bounded retry, circuit breaker |
-| `chat/MockAnswerService` | Deterministic offline answering (business-field retrieval) |
+| `chat/MockAnswerService` | Deterministic offline answering (business-field retrieval, then knowledge quotes) |
+| `knowledge/` | Tenant-scoped ingest, BM25 retrieval, citation numbering |
 | `ratelimit/` | Per-user and per-tenant fixed-window limits |
 | `audit/` | Audit of every turn, successful or failed |
 
@@ -132,10 +136,12 @@ interface PageContextSnapshot {
 | `actionableElements` | 40 (viewport-first) | Client and server |
 | `message` | 8 000 API / 4 000 prompt | Server |
 | Conversation history | 8 turns / 6 000 chars | Server |
+| Knowledge excerpts | top-3, 400 chars each, 3 000 combined | Server retrieval |
 | **Total prompt** | 24 000 chars | Server |
 
 Under budget pressure the server sheds context in a deliberate order: **page text first, then
-history. Business facts are never dropped** — they are the authoritative answer source.
+history. Retrieved knowledge outranks both** (it was selected for this question). **Business facts
+are never dropped** — they are the authoritative answer source for the current record.
 
 ### Redaction
 
@@ -151,7 +157,9 @@ long digit sequences (card-like), `sk-` style keys. Hosts can exclude whole regi
 | Spoofed identity | Only verified JWT claims are trusted; issuer and expiry checked |
 | Weak signing key | Startup fails when the secret is under 32 bytes |
 | Prompt injection via DOM | Page context is labeled untrusted data; system prompt forbids following it |
-| Cross-tenant / cross-user leakage | Threads scoped to `(tenantId, userSub)`; audit reads filtered by tenant |
+| Prompt injection via uploaded docs | Knowledge excerpts are labeled reference data; the model is told not to obey them |
+| Cross-tenant / cross-user leakage | Threads scoped to `(tenantId, userSub)`; knowledge documents scoped to `tenantId`; audit reads filtered by tenant |
+| Knowledge leakage across apps | Chat retrieves with the thread's `appId`; documents for another app are never scored |
 | Audit exposure | `/v1/audits` requires a token plus `audit:read` |
 | Unauthenticated token minting | Demo endpoint exists only under the `dev` profile |
 | Abuse / cost blowout | Per-user and per-tenant rate limits; bounded context and retries |

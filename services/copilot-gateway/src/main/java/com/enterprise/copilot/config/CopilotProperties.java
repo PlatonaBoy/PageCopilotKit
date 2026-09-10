@@ -20,6 +20,7 @@ public class CopilotProperties {
   private boolean corsAllowAllPatterns = false;
   private Context context = new Context();
   private History history = new History();
+  private Knowledge knowledge = new Knowledge();
   private Llm llm = new Llm();
   private RateLimit rateLimit = new RateLimit();
   private Tools tools = new Tools();
@@ -94,6 +95,14 @@ public class CopilotProperties {
 
   public void setHistory(History history) {
     this.history = history;
+  }
+
+  public Knowledge getKnowledge() {
+    return knowledge;
+  }
+
+  public void setKnowledge(Knowledge knowledge) {
+    this.knowledge = knowledge;
   }
 
   public Llm getLlm() {
@@ -223,6 +232,108 @@ public class CopilotProperties {
 
     public void setRetainMessages(int retainMessages) {
       this.retainMessages = retainMessages;
+    }
+  }
+
+  public static class Knowledge {
+    private boolean enabled = true;
+    /** Snippets handed to the model for one question. */
+    private int topK = 3;
+    /** Per-snippet character cap, applied before the block budget. */
+    private int maxSnippetChars = 400;
+    /** Combined budget for the retrieved knowledge block. */
+    private int maxContextChars = 3000;
+    /** Target chunk size at ingest. Chunks are the unit of retrieval and of citation. */
+    private int chunkChars = 700;
+    /** Overlap between adjacent chunks so a fact split across a boundary is still retrievable. */
+    private int chunkOverlapChars = 120;
+    /** Largest single document accepted by the ingest API. */
+    private int maxDocumentChars = 200_000;
+    /** Documents one tenant may store. */
+    private int maxDocumentsPerTenant = 2000;
+    /** Chunks below this BM25 score are treated as noise rather than a weak match. */
+    private double minScore = 0.35;
+    /** Safety valve for the in-process index; ingest is refused beyond this. */
+    private int maxIndexedChunks = 50_000;
+
+    public boolean isEnabled() {
+      return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+      this.enabled = enabled;
+    }
+
+    public int getTopK() {
+      return topK;
+    }
+
+    public void setTopK(int topK) {
+      this.topK = topK;
+    }
+
+    public int getMaxSnippetChars() {
+      return maxSnippetChars;
+    }
+
+    public void setMaxSnippetChars(int maxSnippetChars) {
+      this.maxSnippetChars = maxSnippetChars;
+    }
+
+    public int getMaxContextChars() {
+      return maxContextChars;
+    }
+
+    public void setMaxContextChars(int maxContextChars) {
+      this.maxContextChars = maxContextChars;
+    }
+
+    public int getChunkChars() {
+      return chunkChars;
+    }
+
+    public void setChunkChars(int chunkChars) {
+      this.chunkChars = chunkChars;
+    }
+
+    public int getChunkOverlapChars() {
+      return chunkOverlapChars;
+    }
+
+    public void setChunkOverlapChars(int chunkOverlapChars) {
+      this.chunkOverlapChars = chunkOverlapChars;
+    }
+
+    public int getMaxDocumentChars() {
+      return maxDocumentChars;
+    }
+
+    public void setMaxDocumentChars(int maxDocumentChars) {
+      this.maxDocumentChars = maxDocumentChars;
+    }
+
+    public int getMaxDocumentsPerTenant() {
+      return maxDocumentsPerTenant;
+    }
+
+    public void setMaxDocumentsPerTenant(int maxDocumentsPerTenant) {
+      this.maxDocumentsPerTenant = maxDocumentsPerTenant;
+    }
+
+    public double getMinScore() {
+      return minScore;
+    }
+
+    public void setMinScore(double minScore) {
+      this.minScore = minScore;
+    }
+
+    public int getMaxIndexedChunks() {
+      return maxIndexedChunks;
+    }
+
+    public void setMaxIndexedChunks(int maxIndexedChunks) {
+      this.maxIndexedChunks = maxIndexedChunks;
     }
   }
 

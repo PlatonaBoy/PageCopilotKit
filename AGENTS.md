@@ -17,7 +17,7 @@ Node 20+ and Java 21 are available. Maven (`mvn`) is required for the gateway; i
 
 - **Gateway**: `SPRING_PROFILES_ACTIVE=dev mvn -f services/copilot-gateway/pom.xml spring-boot:run`.
   - The `dev` profile is required locally: it supplies a dev JWT secret, uses an H2 file DB, enables permissive CORS, and registers the unauthenticated `POST /v1/demo/token` endpoint the demo needs. Under any other profile that endpoint is not registered (404) and startup fails without `COPILOT_JWT_SECRET` (≥ 32 bytes).
-  - Mock LLM is the default (`COPILOT_MOCK_LLM=true`), so it runs fully offline. The mock resolves questions against `businessContext` field names, so it answers amount/customer/status correctly. Set `COPILOT_MOCK_LLM=false` + `OPENAI_API_KEY` for a real model.
+  - Mock LLM is the default (`COPILOT_MOCK_LLM=true`), so it runs fully offline. The mock resolves questions against `businessContext` field names, so it answers amount/customer/status correctly. Policy questions are answered from the tenant knowledge base (the `dev` profile seeds refund / approval / invoice documents). Set `COPILOT_MOCK_LLM=false` + `OPENAI_API_KEY` for a real model.
   - Health: `GET http://localhost:8080/v1/health` → `{"status":"UP"}`. Actuator probes at `/actuator/health/{liveness,readiness}`.
 - **Demo host**: from repo root run `npm run build:sdk` FIRST (builds the SDK and copies the IIFE bundle to `apps/demo-host/public/vendor/`), then `npm run dev --prefix apps/demo-host`. `npm run dev:demo` does both. The vendor bundle is git-ignored and must be rebuilt after SDK changes — the demo loads the built file via `<script src>`, so SDK edits are NOT hot-reloaded.
 
@@ -29,10 +29,10 @@ Node 20+ and Java 21 are available. Maven (`mvn`) is required for the gateway; i
 - E2E: start gateway + demo first, then `npm run test:e2e`. Set `CHROME_PATH` to reuse an installed Chrome instead of downloading one, e.g. `CHROME_PATH=/usr/local/bin/google-chrome npm run test:e2e`.
 
 ### Database
-Schema is owned by Flyway (`services/copilot-gateway/src/main/resources/db/migration`) and Hibernate runs with `ddl-auto: validate`. Adding or changing an entity field requires a new `V<n>__*.sql` migration, otherwise startup fails with a schema-validation error. Note that `String` columns backed by `TEXT` must use `columnDefinition = "text"` rather than `@Lob`, or validation will expect a CLOB and fail.
+Schema is owned by Flyway (`services/copilot-gateway/src/main/resources/db/migration`) and Hibernate runs with `ddl-auto: validate`. Adding or changing an entity field requires a new `V<n>__*.sql` migration, otherwise startup fails with a schema-validation error. Note that `String` columns backed by `TEXT` must use `columnDefinition = "text"` rather than `@Lob`, or validation will expect a CLOB and fail. Knowledge documents live in `knowledge_documents` / `knowledge_chunks`; see `docs/knowledge.md`.
 
 ### End-to-end smoke test (no browser needed)
-With the gateway running under `dev`: `POST /v1/demo/token` to mint a JWT, then `POST /v1/chat` (SSE) with `Authorization: Bearer <token>`, `appId: crm`, a `message`, and a `businessContext`. Reuse the returned `threadId` on a follow-up request to exercise multi-turn history, and `GET /v1/threads/{threadId}/messages` to inspect stored turns.
+With the gateway running under `dev`: `POST /v1/demo/token` to mint a JWT, then `POST /v1/chat` (SSE) with `Authorization: Bearer <token>`, `appId: crm`, a `message`, and a `businessContext`. Reuse the returned `threadId` on a follow-up request to exercise multi-turn history, and `GET /v1/threads/{threadId}/messages` to inspect stored turns. Ask 「退货时限是多久」 to exercise knowledge retrieval (the `dev` profile seeds sample documents) and confirm the stream contains an `event:citations` block.
 
 ### Production shape
 `docker compose up --build` runs PostgreSQL plus the gateway on the `prod` profile. Copy `.env.example` to `.env` first — `COPILOT_JWT_SECRET` and `DB_PASSWORD` are required and compose fails fast without them. See `docs/operations.md` for the go-live checklist.

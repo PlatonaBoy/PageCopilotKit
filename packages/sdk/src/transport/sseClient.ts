@@ -1,4 +1,4 @@
-import type { PageContextSnapshot, StreamHandlers, ToolCallRequest } from '../types';
+import type { Citation, PageContextSnapshot, StreamHandlers, ToolCallRequest } from '../types';
 import type { ToolSchema } from '../tools/ToolRegistry';
 import { CopilotError, fromStatus, isAbort } from './errors';
 
@@ -162,6 +162,12 @@ async function request(
         }
         break;
       }
+      case 'citations': {
+        const data = parsed.data as { citations?: unknown };
+        const citations = coerceCitations(data.citations);
+        if (citations.length) options.handlers.onCitations?.(citations);
+        break;
+      }
       case 'error': {
         const data = parsed.data as { code?: string; message?: string };
         streamError = { code: data.code || 'model_error', message: data.message || 'error' };
@@ -242,11 +248,35 @@ function coerceArgs(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function coerceCitations(value: unknown): Citation[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: Citation[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const index = Number(row.index);
+    const title = typeof row.title === 'string' ? row.title : '';
+    const snippet = typeof row.snippet === 'string' ? row.snippet : '';
+    const docId = typeof row.docId === 'string' ? row.docId : '';
+    if (!Number.isFinite(index) || !title) continue;
+    out.push({
+      index,
+      docId,
+      title,
+      source: typeof row.source === 'string' ? row.source : null,
+      snippet,
+    });
+  }
+  return out;
+}
+
 export async function fetchThreadMessages(
   gatewayUrl: string,
   token: string,
   threadId: string,
-): Promise<Array<{ role: string; content: string }>> {
+): Promise<Array<{ role: string; content: string; citations?: Citation[] }>> {
   const res = await fetch(
     joinUrl(gatewayUrl, `/v1/threads/${encodeURIComponent(threadId)}/messages`),
     { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
@@ -254,8 +284,14 @@ export async function fetchThreadMessages(
   if (!res.ok) {
     throw fromStatus(res.status, await res.text().catch(() => ''));
   }
-  const data = (await res.json()) as { messages?: Array<{ role: string; content: string }> };
-  return data.messages ?? [];
+  const data = (await res.json()) as {
+    messages?: Array<{ role: string; content: string; citations?: unknown }>;
+  };
+  return (data.messages ?? []).map((message) => ({
+    role: message.role,
+    content: message.content,
+    citations: coerceCitations(message.citations),
+  }));
 }
 
 export async function deleteThread(

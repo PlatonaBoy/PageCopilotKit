@@ -49,7 +49,12 @@ public class DevTokenController {
             blankTo(req.tenantId(), "demo"),
             req.roles() == null ? List.of("manager") : req.roles(),
             req.permissions() == null
-                ? List.of("order:view", "order:approve", "audit:read")
+                ? List.of(
+                    "order:view",
+                    "order:approve",
+                    "audit:read",
+                    "knowledge:read",
+                    "knowledge:write")
                 : req.permissions(),
             TTL_SECONDS);
     return new TokenResponse(token, TTL_SECONDS);

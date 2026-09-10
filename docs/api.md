@@ -21,7 +21,7 @@ Every response carries `X-Trace-Id`. Send your own to correlate with upstream sy
 | `name` / `preferred_username` | no | Display name. |
 | `tenantId` / `tenant_id` | no | Tenant isolation key. Defaults to `default`. |
 | `roles` | no | String array. |
-| `permissions` | no | String array. `audit:read` gates the audit API. |
+| `permissions` | no | String array. `audit:read` gates the audit API. `knowledge:read` / `knowledge:write` gate the knowledge-base management API. Chat retrieval itself needs no extra permission. |
 
 Signing is HS256 with `COPILOT_JWT_SECRET` (≥ 32 bytes, enforced at startup). Swap in CAS/OIDC JWKS
 by replacing the verification in `JwtService`.
@@ -94,6 +94,7 @@ data: <json>
 | Event | Data | Meaning |
 |-------|------|---------|
 | `thread` | `{ "threadId": "thr_…" }` | Thread assigned. Persist it to resume later. |
+| `citations` | `{ "citations": [{ "index", "docId", "title", "source", "snippet" }] }` | Knowledge sources this answer is grounded on. Sent **before** the first token, omitted when nothing retrieved. `index` is the `[n]` marker in the answer. |
 | `text.delta` | `{ "delta": "…" }` | Incremental answer text. |
 | `text.done` | `{ "content": "…" }` | Complete answer. |
 | `tool.call` | `{ "id", "name", "arguments" }` | The client must execute this and report back. |
@@ -175,8 +176,21 @@ Restores a conversation. Returns 404 when the thread does not exist **or belongs
 {
   "threadId": "thr_9c2b1f",
   "messages": [
-    { "role": "user", "content": "这个订单金额是多少", "createdAt": "2026-08-12T09:00:00Z" },
-    { "role": "assistant", "content": "订单金额为 50000。", "createdAt": "2026-08-12T09:00:01Z" }
+    { "role": "user", "content": "退货时限是多久", "citations": [], "createdAt": "2026-08-12T09:00:00Z" },
+    {
+      "role": "assistant",
+      "content": "根据知识库《退货与退款政策》[1]：客户可在签收后 30 个自然日内申请退货。",
+      "citations": [
+        {
+          "index": 1,
+          "docId": "refund-policy",
+          "title": "退货与退款政策",
+          "source": "https://intranet.example.com/kb/refund-policy",
+          "snippet": "客户可在签收后 30 个自然日内申请退货。"
+        }
+      ],
+      "createdAt": "2026-08-12T09:00:01Z"
+    }
   ]
 }
 ```
@@ -214,6 +228,54 @@ Requires the `audit:read` permission. Always scoped to the caller's tenant.
   ]
 }
 ```
+
+## `POST /v1/knowledge/documents`
+
+Creates or replaces a knowledge document. Requires `knowledge:write`. Tenant comes from the token,
+never from the body. See [knowledge.md](knowledge.md).
+
+```json
+{
+  "docId": "refund-policy",
+  "appId": "crm",
+  "title": "退货与退款政策",
+  "source": "https://intranet.example.com/kb/refund-policy",
+  "tags": ["售后"],
+  "content": "客户可在签收后 30 个自然日内申请退货。…"
+}
+```
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `docId` | no | Stable id. Omit to have one assigned. Re-posting the same id replaces. |
+| `appId` | yes | A value in `copilot.allowed-app-ids`, or `*` for every application in the tenant. |
+| `title` | yes | Shown on the citation chip. |
+| `source` | no | URL or locator shown with the citation. |
+| `tags` | no | Labels, max 20. |
+| `content` | yes | Full text. Chunked on ingest. Max `copilot.knowledge.max-document-chars`. |
+
+## `GET /v1/knowledge/documents`
+
+Requires `knowledge:read`. Query: `appId`, `limit` (default 50, max 200). Always scoped to the caller’s tenant.
+
+## `GET /v1/knowledge/documents/{docId}`
+
+Requires `knowledge:read`. Returns 404 when the document is missing **or belongs to another tenant**.
+
+## `DELETE /v1/knowledge/documents/{docId}`
+
+Requires `knowledge:write`. Drops the document and its chunks, then invalidates the tenant index.
+
+## `POST /v1/knowledge/search`
+
+Requires `knowledge:read`. Runs the same retrieval chat uses, without generating an answer.
+
+```json
+{ "query": "退货时限是多久", "appId": "crm", "topK": 3 }
+```
+
+Omit `appId` to search every document in the tenant (administrative). Chat itself always retrieves
+with the thread’s application.
 
 ## `GET /v1/health`
 
@@ -253,6 +315,10 @@ configuration alone.
 | 409 | `no_pending_tool_call` | Tool result posted with no call outstanding |
 | 409 | `tool_call_mismatch` | Tool result does not match the outstanding call |
 | 409 | `tool_step_limit` | Turn exceeded `copilot.tools.max-steps-per-turn` |
+| 404 | `knowledge_document_not_found` | Document missing **or owned by another tenant** |
+| 409 | `knowledge_quota_exceeded` | Tenant hit `max-documents-per-tenant` or `max-indexed-chunks` |
+| 409 | `knowledge_disabled` | `copilot.knowledge.enabled=false` |
+| 413 | `knowledge_document_too_large` | Title, body or tags exceed configured limits |
 | 413 | `context_too_large` | `businessContext` over 4KB |
 | 429 | `rate_limited` | Per-user or per-tenant limit exceeded |
 | 500 | `internal_error` | Unexpected failure (no stack details exposed) |

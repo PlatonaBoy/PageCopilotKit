@@ -138,6 +138,52 @@ button { font-family: inherit; }
 }
 .row-actions button:hover { color: var(--copilot-ink); border-color: #b9c7d6; }
 
+.citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+  max-width: 100%;
+}
+.citations-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--copilot-muted);
+  line-height: 22px;
+}
+.citation {
+  max-width: 100%;
+  border: 1px solid var(--copilot-line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.citation summary {
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  list-style: none;
+  padding: 4px 0;
+}
+.citation summary::-webkit-details-marker { display: none; }
+.citation-index { font-weight: 600; color: var(--copilot-primary); }
+.citation-title { color: var(--copilot-ink); }
+.citation-snippet {
+  margin: 0 0 6px;
+  color: var(--copilot-muted);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.citation-source {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: var(--copilot-primary);
+  word-break: break-all;
+}
+
 .typing { display: inline-flex; align-items: center; gap: 4px; height: 18px; }
 .typing span {
   width: 6px;

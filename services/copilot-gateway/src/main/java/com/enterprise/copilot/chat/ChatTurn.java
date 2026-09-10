@@ -40,6 +40,13 @@ public class ChatTurn {
   @Column(nullable = false, columnDefinition = "text")
   private String content;
 
+  /**
+   * Knowledge sources this turn was grounded on, as a JSON array. Stored on the turn so restoring
+   * a thread shows the same provenance the user saw while the answer streamed.
+   */
+  @Column(columnDefinition = "text")
+  private String citations;
+
   @Column(nullable = false)
   private Instant createdAt = Instant.now();
 
@@ -48,6 +55,12 @@ public class ChatTurn {
     turn.threadId = threadId;
     turn.role = role;
     turn.content = content == null ? "" : content;
+    return turn;
+  }
+
+  public static ChatTurn of(String threadId, Role role, String content, String citations) {
+    ChatTurn turn = of(threadId, role, content);
+    turn.citations = citations == null || citations.isBlank() ? null : citations;
     return turn;
   }
 
@@ -65,6 +78,10 @@ public class ChatTurn {
 
   public String getContent() {
     return content;
+  }
+
+  public String getCitations() {
+    return citations;
   }
 
   public Instant getCreatedAt() {
