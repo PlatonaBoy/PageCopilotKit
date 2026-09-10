@@ -244,7 +244,7 @@ public class KnowledgeService {
    * <p>Showing the head of the chunk would often miss the sentence that actually answered the
    * question, which makes a citation look wrong even when the retrieval was right.
    */
-  static String excerpt(String content, Set<String> queryTerms, int maxChars) {
+  public static String excerpt(String content, Set<String> queryTerms, int maxChars) {
     String text = content.strip();
     if (text.length() <= maxChars) {
       return text;

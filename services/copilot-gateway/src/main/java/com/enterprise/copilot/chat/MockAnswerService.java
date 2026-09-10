@@ -4,12 +4,16 @@ import com.enterprise.copilot.api.dto.ChatDtos.ActionableElement;
 import com.enterprise.copilot.api.dto.ChatDtos.ChatRequest;
 import com.enterprise.copilot.api.dto.ChatDtos.ClientTool;
 import com.enterprise.copilot.api.dto.ChatDtos.PageContext;
+import com.enterprise.copilot.knowledge.KnowledgeService;
+import com.enterprise.copilot.knowledge.KnowledgeTokenizer;
 import com.enterprise.copilot.knowledge.RetrievedSnippet;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
@@ -86,7 +90,7 @@ public class MockAnswerService {
       List.of("这个页面", "当前页面", "什么页面", "页面是", "摘要", "summar", "what page", "this page");
 
   /** How much of a retrieved passage the offline answer quotes verbatim. */
-  private static final int KNOWLEDGE_QUOTE_CHARS = 220;
+  private static final int KNOWLEDGE_QUOTE_CHARS = 120;
 
   /** A deterministic offline plan: either a tool to invoke or a textual answer. */
   public record MockPlan(ModelClient.ToolInvocation toolCall, String text) {}
@@ -339,7 +343,7 @@ public class MockAnswerService {
       }
     }
 
-    String fromKnowledge = answerFromKnowledge(knowledge);
+    String fromKnowledge = answerFromKnowledge(question, knowledge);
     if (fromKnowledge != null) {
       return fromKnowledge;
     }
@@ -369,20 +373,21 @@ public class MockAnswerService {
   }
 
   /**
-   * Quotes the top-ranked passage and cites it.
+   * Quotes the relevant window of the top-ranked passage and cites it.
    *
    * <p>Deliberately quotes rather than paraphrases: without a language model, any rewording would
    * be a guess, and a wrong paraphrase under a real citation is worse than a verbatim excerpt.
+   * The window is centred on the question's own terms so a short document's preamble is not what
+   * the user sees.
    */
-  private static String answerFromKnowledge(List<RetrievedSnippet> knowledge) {
+  private static String answerFromKnowledge(String question, List<RetrievedSnippet> knowledge) {
     if (knowledge == null || knowledge.isEmpty()) {
       return null;
     }
     RetrievedSnippet best = knowledge.get(0);
-    String snippet = best.snippet().replace("\n", " ").strip();
-    if (snippet.length() > KNOWLEDGE_QUOTE_CHARS) {
-      snippet = snippet.substring(0, KNOWLEDGE_QUOTE_CHARS).strip() + "…";
-    }
+    Set<String> terms = new LinkedHashSet<>(KnowledgeTokenizer.tokenize(question));
+    String snippet = KnowledgeService.excerpt(best.snippet(), terms, KNOWLEDGE_QUOTE_CHARS);
+    snippet = snippet.replace("\n", " ").strip();
     return "根据知识库《%s》[%d]：%s（离线模式，未使用大模型）"
         .formatted(best.title(), best.index(), snippet);
   }

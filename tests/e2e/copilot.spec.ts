@@ -140,6 +140,8 @@ test('answers a knowledge-base question with a visible citation', async ({ page 
   await expect(shadow(page).locator('.citations')).toBeVisible();
   await expect(shadow(page).locator('.citation-title').first()).toContainText('退货');
 });
+
+test('closes the panel with Escape', async ({ page }) => {
   await openPanel(page);
   await shadow(page).locator('textarea').press('Escape');
   await expect(shadow(page).locator('.panel')).not.toBeVisible();

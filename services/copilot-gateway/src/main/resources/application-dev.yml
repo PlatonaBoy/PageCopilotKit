@@ -15,6 +15,11 @@ copilot:
   cors-allow-all-patterns: true
   llm:
     mock: ${COPILOT_MOCK_LLM:true}
+  rate-limit:
+    # The Playwright suite plus manual clicking share one demo user; 20/min is a production
+    # default that makes local verification flake. Abuse protection still exists, just looser.
+    per-user-per-minute: ${COPILOT_RATE_USER:120}
+    per-tenant-per-minute: ${COPILOT_RATE_TENANT:600}
   tools:
     enabled: true
     # Mirrors a realistic production policy so the demo exercises both gates.
