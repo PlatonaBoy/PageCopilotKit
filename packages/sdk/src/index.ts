@@ -16,6 +16,7 @@ export type {
   PageActionOptions,
   PageContextSnapshot,
   PendingToolCall,
+  Citation,
   ToolActivity,
   ToolRisk,
 } from './types';

@@ -27,6 +27,7 @@ used in production**. Always set `SPRING_PROFILES_ACTIVE=prod` for real deployme
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | optional | Any OpenAI-compatible endpoint. |
 | `COPILOT_RATE_USER` / `COPILOT_RATE_TENANT` | optional | Requests per minute. Defaults 20 / 200. |
 | `COPILOT_LLM_TIMEOUT` | optional | Default `45s`. |
+| `COPILOT_KNOWLEDGE_ENABLED` | optional | Default `true`. Set `false` to disable ingest and retrieval. |
 
 ## Deploy with Docker
 
@@ -89,6 +90,7 @@ to your data policy.
 - [ ] `GET /v1/demo/token` returns **404**
 - [ ] `GET /v1/audits` without `audit:read` returns **403**
 - [ ] Cross-user access to another `threadId` returns **404**
+- [ ] Knowledge documents of another tenant return **404**; `GET /v1/knowledge/documents` without `knowledge:read` returns **403**
 - [ ] PostgreSQL reachable; Flyway migrations applied on boot
 - [ ] Readiness/liveness probes wired to the actuator endpoints
 - [ ] Log aggregation captures `traceId` and `tenantId`

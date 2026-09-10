@@ -82,6 +82,20 @@ copilot:
     max-turns: 8
     max-chars: 6000
     retain-messages: 200
+  knowledge:
+    enabled: ${COPILOT_KNOWLEDGE_ENABLED:true}
+    # Passages handed to the model per question, and how much text they may occupy in total.
+    top-k: ${COPILOT_KNOWLEDGE_TOP_K:3}
+    max-snippet-chars: 400
+    max-context-chars: 3000
+    # Ingest-time chunking. Overlap keeps a fact that straddles a boundary retrievable.
+    chunk-chars: 700
+    chunk-overlap-chars: 120
+    max-document-chars: 200000
+    max-documents-per-tenant: 2000
+    # BM25 score floor. Below this a match is noise, and answering "nothing found" is correct.
+    min-score: ${COPILOT_KNOWLEDGE_MIN_SCORE:0.35}
+    max-indexed-chunks: 50000
   context:
     max-business-bytes: 4096
     max-summary-chars: 12000

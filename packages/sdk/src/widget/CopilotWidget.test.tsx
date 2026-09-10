@@ -239,4 +239,33 @@ describe('CopilotWidget', () => {
       expect(screen.getByText('page_fill → 金额')).toBeTruthy();
     });
   });
+
+  it('renders expandable citation chips under an assistant answer', async () => {
+    const user = userEvent.setup();
+    const store = new CopilotStore();
+    setup({ store });
+
+    store.appendMessage({
+      id: 'a1',
+      role: 'assistant',
+      content: '根据知识库《退货与退款政策》[1]：签收后 30 日内可退货。',
+      status: 'done',
+      citations: [
+        {
+          index: 1,
+          docId: 'refund-policy',
+          title: '退货与退款政策',
+          source: 'https://intranet.example.com/kb/refund-policy',
+          snippet: '客户可在签收后 30 个自然日内申请退货。',
+        },
+      ],
+    });
+
+    expect(await screen.findByText('来源')).toBeTruthy();
+    expect(screen.getByText('退货与退款政策')).toBeTruthy();
+
+    await user.click(screen.getByText('退货与退款政策'));
+    expect(await screen.findByText(/30 个自然日/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'https://intranet.example.com/kb/refund-policy' })).toBeTruthy();
+  });
 });

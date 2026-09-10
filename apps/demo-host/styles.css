@@ -73,8 +73,15 @@ h1 {
 }
 
 .subtitle {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
+.hint {
   margin: 0 0 24px;
   color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .detail {

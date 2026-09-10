@@ -33,7 +33,8 @@ export type MessageKey =
   | 'toolFailed'
   | 'toolUnknown'
   | 'toolStepLimit'
-  | 'errorToolForbidden';
+  | 'errorToolForbidden'
+  | 'sources';
 
 type Catalog = Record<MessageKey, string>;
 
@@ -51,7 +52,7 @@ const ZH: Catalog = {
   copied: '已复制',
   clear: '清空会话',
   clearConfirm: '确定清空当前会话吗？',
-  emptyState: '你可以问我当前页面的内容，例如页面上有哪些操作、某个字段的值是多少。',
+  emptyState: '你可以问我当前页面的内容，也可以问企业知识库里的政策，例如退货时限、审批时效。',
   thinking: '正在思考…',
   restoring: '正在恢复会话…',
   errorPrefix: '出错了：',
@@ -73,6 +74,7 @@ const ZH: Catalog = {
   toolUnknown: '该操作未在本页面注册，已拒绝',
   toolStepLimit: '连续操作步数过多，已中止。请拆分成更小的请求。',
   errorToolForbidden: '当前账号没有执行该操作的权限。',
+  sources: '来源',
 };
 
 const EN: Catalog = {
@@ -90,7 +92,7 @@ const EN: Catalog = {
   clear: 'Clear conversation',
   clearConfirm: 'Clear the current conversation?',
   emptyState:
-    'Ask me about this page — which actions are available, or the value of a specific field.',
+    "Ask me about this page, or about your organization's knowledge base — policies, SLAs, definitions.",
   thinking: 'Thinking…',
   restoring: 'Restoring conversation…',
   errorPrefix: 'Error: ',
@@ -112,6 +114,7 @@ const EN: Catalog = {
   toolUnknown: 'This action is not registered on the page and was rejected',
   toolStepLimit: 'Too many consecutive actions; stopped. Please split the request.',
   errorToolForbidden: 'Your account is not allowed to perform this action.',
+  sources: 'Sources',
 };
 
 const CATALOGS: Record<string, Catalog> = {

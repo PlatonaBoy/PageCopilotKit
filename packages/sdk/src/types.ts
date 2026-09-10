@@ -95,12 +95,22 @@ export type ChatRole = 'user' | 'assistant';
 
 export type ChatMessageStatus = 'pending' | 'streaming' | 'done' | 'error' | 'stopped';
 
+/** A knowledge source an answer was grounded on. `index` is the `[n]` marker in the answer. */
+export interface Citation {
+  index: number;
+  docId: string;
+  title: string;
+  source?: string | null;
+  snippet: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
   status: ChatMessageStatus;
   errorCode?: string;
+  citations?: Citation[];
 }
 
 /** A completed tool invocation, rendered in the transcript so actions are always visible. */
@@ -142,6 +152,7 @@ export interface StreamHandlers {
   onThread?: (threadId: string) => void;
   onDelta?: (delta: string) => void;
   onToolCall?: (call: ToolCallRequest) => void;
+  onCitations?: (citations: Citation[]) => void;
   onDone?: (content: string, traceId?: string) => void;
   onError?: (code: string, message: string) => void;
 }

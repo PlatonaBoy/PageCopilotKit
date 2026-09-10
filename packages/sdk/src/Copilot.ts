@@ -12,7 +12,7 @@ import {
   streamToolResult,
   type TurnOutcome,
 } from './transport/sseClient';
-import type { ChatMessage, CopilotInit, CopilotTool, ToolCallRequest } from './types';
+import type { ChatMessage, Citation, CopilotInit, CopilotTool, ToolCallRequest } from './types';
 import { mountWidget, type MountHandle } from './widget/mount';
 
 const THREAD_STORAGE_PREFIX = 'enterprise-copilot:thread:';
@@ -187,6 +187,7 @@ export class Copilot {
           role: m.role === 'assistant' ? 'assistant' : 'user',
           content: m.content,
           status: 'done' as const,
+          citations: m.citations && m.citations.length > 0 ? m.citations : undefined,
         })),
       );
     } catch {
@@ -456,6 +457,9 @@ export class Copilot {
         this.rememberThread(threadId);
       },
       onDelta: (delta: string) => this.store.appendDelta(assistantId, delta),
+      onCitations: (citations: Citation[]) => {
+        this.store.updateMessage(assistantId, { citations });
+      },
     };
   }
 

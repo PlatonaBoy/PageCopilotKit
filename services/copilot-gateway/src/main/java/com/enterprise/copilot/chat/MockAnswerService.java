@@ -4,11 +4,16 @@ import com.enterprise.copilot.api.dto.ChatDtos.ActionableElement;
 import com.enterprise.copilot.api.dto.ChatDtos.ChatRequest;
 import com.enterprise.copilot.api.dto.ChatDtos.ClientTool;
 import com.enterprise.copilot.api.dto.ChatDtos.PageContext;
+import com.enterprise.copilot.knowledge.KnowledgeService;
+import com.enterprise.copilot.knowledge.KnowledgeTokenizer;
+import com.enterprise.copilot.knowledge.RetrievedSnippet;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
@@ -84,6 +89,9 @@ public class MockAnswerService {
   private static final List<String> SUMMARY_KEYWORDS =
       List.of("这个页面", "当前页面", "什么页面", "页面是", "摘要", "summar", "what page", "this page");
 
+  /** How much of a retrieved passage the offline answer quotes verbatim. */
+  private static final int KNOWLEDGE_QUOTE_CHARS = 120;
+
   /** A deterministic offline plan: either a tool to invoke or a textual answer. */
   public record MockPlan(ModelClient.ToolInvocation toolCall, String text) {}
 
@@ -99,7 +107,8 @@ public class MockAnswerService {
       PageContext page,
       Map<String, Object> businessContext,
       List<ClientTool> tools,
-      List<ChatTurn> history) {
+      List<ChatTurn> history,
+      List<RetrievedSnippet> knowledge) {
     String text = question == null ? "" : question.trim();
     String lower = text.toLowerCase(Locale.ROOT);
 
@@ -117,7 +126,10 @@ public class MockAnswerService {
         return new MockPlan(call, "");
       }
     }
-    return new MockPlan(null, answer(new ChatRequest("mock", null, text, page, businessContext, tools), history));
+    return new MockPlan(
+        null,
+        answer(
+            new ChatRequest("mock", null, text, page, businessContext, tools), history, knowledge));
   }
 
   /**
@@ -289,6 +301,16 @@ public class MockAnswerService {
   }
 
   public String answer(ChatRequest request, List<ChatTurn> history) {
+    return answer(request, history, List.of());
+  }
+
+  /**
+   * Resolution order mirrors the grounding rules the real model is given: authoritative business
+   * fields first, then the knowledge base, then loose recall from the page. Only a knowledge answer
+   * carries a citation marker, because only it has a source to point at.
+   */
+  public String answer(
+      ChatRequest request, List<ChatTurn> history, List<RetrievedSnippet> knowledge) {
     String question = request.message() == null ? "" : request.message().trim();
     String lower = question.toLowerCase(Locale.ROOT);
     String title = pageTitle(request);
@@ -321,6 +343,11 @@ public class MockAnswerService {
       }
     }
 
+    String fromKnowledge = answerFromKnowledge(question, knowledge);
+    if (fromKnowledge != null) {
+      return fromKnowledge;
+    }
+
     if (matchesAny(lower, SUMMARY_KEYWORDS)) {
       return "当前页面是「"
           + title
@@ -343,6 +370,26 @@ public class MockAnswerService {
           + "。（离线模式）";
     }
     return "当前页面与业务上下文中没有相关信息。可询问：" + describeAvailable(request) + "。（离线模式）";
+  }
+
+  /**
+   * Quotes the relevant window of the top-ranked passage and cites it.
+   *
+   * <p>Deliberately quotes rather than paraphrases: without a language model, any rewording would
+   * be a guess, and a wrong paraphrase under a real citation is worse than a verbatim excerpt.
+   * The window is centred on the question's own terms so a short document's preamble is not what
+   * the user sees.
+   */
+  private static String answerFromKnowledge(String question, List<RetrievedSnippet> knowledge) {
+    if (knowledge == null || knowledge.isEmpty()) {
+      return null;
+    }
+    RetrievedSnippet best = knowledge.get(0);
+    Set<String> terms = new LinkedHashSet<>(KnowledgeTokenizer.tokenize(question));
+    String snippet = KnowledgeService.excerpt(best.snippet(), terms, KNOWLEDGE_QUOTE_CHARS);
+    snippet = snippet.replace("\n", " ").strip();
+    return "根据知识库《%s》[%d]：%s（离线模式，未使用大模型）"
+        .formatted(best.title(), best.index(), snippet);
   }
 
   private static String describeAvailable(ChatRequest request) {

@@ -24,7 +24,7 @@ async function fetchDemoToken() {
       name: '张三',
       tenantId: 'demo',
       roles: ['manager'],
-      permissions: ['order:view', 'order:approve', 'audit:read'],
+      permissions: ['order:view', 'order:approve', 'audit:read', 'knowledge:read', 'knowledge:write'],
     }),
   });
   if (!res.ok) {

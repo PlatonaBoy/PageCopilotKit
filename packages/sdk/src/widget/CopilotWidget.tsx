@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import Markdown from 'react-markdown';
 import type { Translator } from '../i18n';
 import type { CopilotStore } from '../store';
-import type { ChatMessage, CopilotUIOptions, ToolActivity } from '../types';
+import type { ChatMessage, Citation, CopilotUIOptions, ToolActivity } from '../types';
 
 export interface CopilotWidgetProps {
   ui?: CopilotUIOptions;
@@ -207,6 +207,10 @@ export function CopilotWidget({
                   )}
                 </div>
 
+                {m.role === 'assistant' && m.citations && m.citations.length > 0 ? (
+                  <CitationList citations={m.citations} t={t} />
+                ) : null}
+
                 {m.role === 'assistant' && m.content && m.status !== 'pending' ? (
                   <div className="row-actions">
                     <button type="button" onClick={() => void copy(m)}>
@@ -284,6 +288,32 @@ export function CopilotWidget({
         </div>
       </div>
     </>
+  );
+}
+
+function CitationList({ citations, t }: { citations: Citation[]; t: Translator }) {
+  return (
+    <div className="citations" role="group" aria-label={t('sources')}>
+      <span className="citations-label">{t('sources')}</span>
+      {citations.map((citation) => (
+        <details key={`${citation.docId}-${citation.index}`} className="citation">
+          <summary>
+            <span className="citation-index">[{citation.index}]</span>
+            <span className="citation-title">{citation.title}</span>
+          </summary>
+          {citation.snippet ? <p className="citation-snippet">{citation.snippet}</p> : null}
+          {citation.source ? (
+            citation.source.startsWith('http') ? (
+              <a className="citation-source" href={citation.source} target="_blank" rel="noreferrer">
+                {citation.source}
+              </a>
+            ) : (
+              <span className="citation-source">{citation.source}</span>
+            )
+          ) : null}
+        </details>
+      ))}
+    </div>
   );
 }
 

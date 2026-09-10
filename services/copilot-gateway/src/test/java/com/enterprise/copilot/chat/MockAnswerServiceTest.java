@@ -9,6 +9,7 @@ import com.enterprise.copilot.api.dto.ChatDtos.ActionableElement;
 import com.enterprise.copilot.api.dto.ChatDtos.ChatRequest;
 import com.enterprise.copilot.api.dto.ChatDtos.ClientTool;
 import com.enterprise.copilot.api.dto.ChatDtos.PageContext;
+import com.enterprise.copilot.knowledge.RetrievedSnippet;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -78,6 +79,7 @@ class MockAnswerServiceTest {
             page(),
             BUSINESS,
             List.of(tool("approveOrder", "审批当前订单", "write")),
+            List.of(),
             List.of());
 
     assertNotNull(plan.toolCall(), "an action request must produce a tool call");
@@ -89,7 +91,12 @@ class MockAnswerServiceTest {
   void planFallsBackToClickingTheNamedControl() {
     var plan =
         service.plan(
-            "帮我点提交审批", page(), BUSINESS, List.of(tool("page_click", "点击控件", "write")), List.of());
+            "帮我点提交审批",
+            page(),
+            BUSINESS,
+            List.of(tool("page_click", "点击控件", "write")),
+            List.of(),
+            List.of());
 
     assertNotNull(plan.toolCall());
     assertEquals("page_click", plan.toolCall().name());
@@ -113,6 +120,7 @@ class MockAnswerServiceTest {
             form,
             BUSINESS,
             List.of(tool("approveOrder", "审批当前订单", "write"), tool("page_fill", "填写字段", "write")),
+            List.of(),
             List.of());
 
     assertNotNull(plan.toolCall());
@@ -133,7 +141,12 @@ class MockAnswerServiceTest {
 
     var plan =
         service.plan(
-            "把优先级改成加急", form, BUSINESS, List.of(tool("page_select", "选择选项", "write")), List.of());
+            "把优先级改成加急",
+            form,
+            BUSINESS,
+            List.of(tool("page_select", "选择选项", "write")),
+            List.of(),
+            List.of());
 
     assertNotNull(plan.toolCall());
     assertEquals("page_select", plan.toolCall().name());
@@ -151,7 +164,13 @@ class MockAnswerServiceTest {
             null);
 
     var plan =
-        service.plan("帮我填写审批人", form, BUSINESS, List.of(tool("page_fill", "填写字段", "write")), List.of());
+        service.plan(
+            "帮我填写审批人",
+            form,
+            BUSINESS,
+            List.of(tool("page_fill", "填写字段", "write")),
+            List.of(),
+            List.of());
 
     assertNull(plan.toolCall(), "without a value there is nothing to type");
   }
@@ -164,6 +183,7 @@ class MockAnswerServiceTest {
             page(),
             BUSINESS,
             List.of(tool("approveOrder", "审批当前订单", "write")),
+            List.of(),
             List.of());
 
     assertNull(plan.toolCall(), "a question must not trigger an action");
@@ -172,7 +192,7 @@ class MockAnswerServiceTest {
 
   @Test
   void planDoesNotActWhenNoToolsAreAvailable() {
-    var plan = service.plan("帮我点提交审批", page(), BUSINESS, List.of(), List.of());
+    var plan = service.plan("帮我点提交审批", page(), BUSINESS, List.of(), List.of(), List.of());
     assertNull(plan.toolCall());
   }
 
@@ -187,5 +207,28 @@ class MockAnswerServiceTest {
   void describesFailedActionsWithTheReason() {
     String outcome = service.describeToolOutcome("page_click", null, "element is disabled");
     assertTrue(outcome.contains("失败") && outcome.contains("element is disabled"));
+  }
+
+  @Test
+  void quotesRetrievedKnowledgeAndCitesIt() {
+    RetrievedSnippet snippet =
+        new RetrievedSnippet(1, "refund-policy", "退货与退款政策", null, "客户可在签收后 30 个自然日内申请退货。", 0, 2.1);
+
+    String answer = service.answer(ask("退货时限是多久"), List.of(), List.of(snippet));
+
+    assertTrue(answer.contains("退货与退款政策"), () -> answer);
+    assertTrue(answer.contains("[1]"), () -> answer);
+    assertTrue(answer.contains("30 个自然日"), () -> answer);
+  }
+
+  @Test
+  void prefersBusinessFactsOverKnowledgeWhenBothMatch() {
+    RetrievedSnippet snippet =
+        new RetrievedSnippet(1, "pricing", "价目表", null, "标准金额为 1 元。", 0, 4.0);
+
+    String answer = service.answer(ask("这个订单金额是多少"), List.of(), List.of(snippet));
+
+    assertTrue(answer.contains("50000"), () -> answer);
+    assertTrue(!answer.contains("[1]"), "business facts must not be cited as knowledge");
   }
 }

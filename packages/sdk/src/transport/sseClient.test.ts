@@ -80,6 +80,35 @@ describe('streamChat', () => {
     expect(trace).toBe('trc_1');
   });
 
+  it('surfaces citations from the stream before the answer finishes', async () => {
+    mockFetch(
+      sseResponse([
+        'event:thread\ndata:{"threadId":"thr_1"}\n\n',
+        'event:citations\ndata:{"citations":[{"index":1,"docId":"refund-policy","title":"退货政策","source":"https://kb/refund","snippet":"30 日内可退货"}]}\n\n',
+        'event:text.delta\ndata:{"delta":"根据知识库"}\n\n',
+        'event:done\ndata:{"traceId":"trc_1"}\n\n',
+      ]),
+    );
+
+    const citations: unknown[] = [];
+    await streamChat({
+      gatewayUrl: 'http://gw',
+      token: 't',
+      body,
+      handlers: { onCitations: (c) => citations.push(...c) },
+    });
+
+    expect(citations).toEqual([
+      {
+        index: 1,
+        docId: 'refund-policy',
+        title: '退货政策',
+        source: 'https://kb/refund',
+        snippet: '30 日内可退货',
+      },
+    ]);
+  });
+
   it('handles events split across network chunks', async () => {
     mockFetch(
       sseResponse([

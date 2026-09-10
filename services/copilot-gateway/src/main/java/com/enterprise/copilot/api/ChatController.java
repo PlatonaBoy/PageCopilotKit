@@ -1,6 +1,7 @@
 package com.enterprise.copilot.api;
 
 import com.enterprise.copilot.api.dto.ChatDtos.ChatRequest;
+import com.enterprise.copilot.api.dto.ChatDtos.Citation;
 import com.enterprise.copilot.api.dto.ChatDtos.ThreadMessage;
 import com.enterprise.copilot.api.dto.ChatDtos.ThreadMessagesResponse;
 import com.enterprise.copilot.api.dto.ChatDtos.ToolResultRequest;
@@ -9,10 +10,15 @@ import com.enterprise.copilot.auth.UserPrincipal;
 import com.enterprise.copilot.chat.ChatService;
 import com.enterprise.copilot.chat.ChatTurn;
 import com.enterprise.copilot.chat.ThreadService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,12 +33,17 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/v1")
 public class ChatController {
 
+  private static final Logger log = LoggerFactory.getLogger(ChatController.class);
+
   private final ChatService chatService;
   private final ThreadService threadService;
+  private final ObjectMapper objectMapper;
 
-  public ChatController(ChatService chatService, ThreadService threadService) {
+  public ChatController(
+      ChatService chatService, ThreadService threadService, ObjectMapper objectMapper) {
     this.chatService = chatService;
     this.threadService = threadService;
+    this.objectMapper = objectMapper;
   }
 
   /** Charset is declared explicitly so intermediaries never guess at non-ASCII answers. */
@@ -68,8 +79,27 @@ public class ChatController {
             .map(
                 turn ->
                     new ThreadMessage(
-                        turn.getRole().name().toLowerCase(), turn.getContent(), turn.getCreatedAt()))
+                        turn.getRole().name().toLowerCase(),
+                        turn.getContent(),
+                        readCitations(turn.getCitations()),
+                        turn.getCreatedAt()))
             .toList());
+  }
+
+  /**
+   * Citations are stored as JSON on the turn. A row written by an older build — or by a future one
+   * with a wider shape — must not break a restore, so a parse failure degrades to "no sources".
+   */
+  private List<Citation> readCitations(String json) {
+    if (json == null || json.isBlank()) {
+      return List.of();
+    }
+    try {
+      return objectMapper.readValue(json, new TypeReference<List<Citation>>() {});
+    } catch (JsonProcessingException ex) {
+      log.warn("Ignoring unreadable citations on a restored turn", ex);
+      return List.of();
+    }
   }
 
   @DeleteMapping("/threads/{threadId}")
